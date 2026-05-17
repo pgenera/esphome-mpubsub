@@ -1,0 +1,51 @@
+# Example 6: The motivating use case from the original spec.
+#
+# A robot vacuum and a robot mop coordinate via a topic. The mop only mops
+# AFTER the vacuum is done. Crucially: if the internet is down, this still
+# works, because the two devices coordinate directly over the LAN.
+
+# --- robot-vacuum.yaml ---
+esphome:
+  name: robot-vacuum
+
+esp32:
+  board: esp32dev
+  framework:
+    type: esp-idf
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+
+external_components:
+  - source:
+      type: git
+      url: https://github.com/pgenera/esphome-multicast
+      ref: main
+    components: [multicast_pubsub]
+
+multicast_pubsub:
+  scope: link-local
+
+# When the vacuum finishes (driven by hardware logic not shown), publish:
+binary_sensor:
+  - platform: gpio
+    pin: GPIO34
+    name: "Vacuum Done Signal"
+    on_press:
+      - multicast_pubsub.publish:
+          topic: "home/vacuum/status"
+          payload: "done"
+
+# --- robot-mop.yaml would have ---
+#
+# multicast_pubsub:
+#   scope: link-local
+#   on_message:
+#     - topic: "home/vacuum/status"
+#       then:
+#         - lambda: |-
+#             std::string s(reinterpret_cast<const char*>(x.data()), x.size());
+#             if (s == "done") {
+#               id(start_mop_mission).execute();
+#             }

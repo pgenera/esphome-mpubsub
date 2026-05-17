@@ -1,0 +1,68 @@
+# multicast_pubsub tests
+
+## Unit tests
+
+Pure-Python (and small C++ test binaries). Cover the spec without booting an
+ESPHome firmware.
+
+```bash
+cd tests/unit
+make            # builds topic_hash_test and wire_format_test
+pytest -q       # runs all 63 unit tests in ~3s
+```
+
+| Test file                    | What it covers                                                  |
+|------------------------------|-----------------------------------------------------------------|
+| `test_topic_hash.py`         | SHA-256 layout, scope nibbles, CRC32 (Python reference)         |
+| `test_topic_hash_cpp.py`     | C++ topic_to_group / topic_crc32 == Python reference (byte-for-byte) |
+| `test_wire_format.py`        | Encode/decode round-trip, validation rules (Python)             |
+| `test_wire_format_cpp.py`    | C++ encode/decode == Python reference, all reject reasons       |
+| `test_config.py`             | YAML schema accepts valid configs, rejects bad scope/port/topic |
+
+## Integration tests (host platform)
+
+All three configurations target `platform: host`, so they compile and run as
+native Linux binaries — **no ESP hardware required**. End-to-end IPv6
+multicast loops over the loopback interface.
+
+```bash
+esphome config tests/publisher.yaml
+esphome config tests/subscriber.yaml
+esphome config tests/bridge_example.yaml   # esp32, config-only
+esphome compile tests/subscriber.yaml
+esphome compile tests/publisher.yaml
+```
+
+To run end-to-end:
+
+```bash
+./tests/.esphome/build/pubsub-subscriber/.pioenvs/pubsub-subscriber/program &
+./tests/.esphome/build/pubsub-publisher/.pioenvs/pubsub-publisher/program &
+# In a third terminal, snoop the wire with the independent Python implementation:
+python3 tests/probe.py --topic test/temp --scope link-local --iface lo
+```
+
+You should see the subscriber log `Subscribed Temperature: Received new state
+NN.000000` once per second, and the probe should print one captured frame per
+second with `flags=01` (FLAG_TEXT) and the ASCII float payload.
+
+## What each integration file demonstrates
+
+* **`publisher.yaml`** — one host-platform device that ticks a template
+  sensor every second and publishes its state on topic `test/temp` via the
+  `mode: publish` sensor platform.
+* **`subscriber.yaml`** — a second host-platform device that subscribes via
+  `mode: subscribe` and also has an `on_message:` trigger for a control topic.
+* **`bridge_example.yaml`** — esp32 device running BOTH `mqtt:` and
+  `multicast_pubsub:` simultaneously, bridging messages between them in
+  automations. Validates that the two components coexist (the C++ MQTT
+  client doesn't have a host port, so this one is `esphome config`-only).
+
+## probe.py
+
+`tests/probe.py` is a single-file Python reference that joins the multicast
+group for a topic and decodes incoming frames using the same
+`tests/unit/reference.py` module the unit tests use. With `--publish TEXT` it
+crafts a valid packet and sends it. This gives us a fully independent
+implementation that the C++ component is cross-checked against in
+integration tests.

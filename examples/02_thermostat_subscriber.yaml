@@ -1,0 +1,61 @@
+# Example 2: Subscribe to a remote temperature and drive a relay.
+#
+# A separate ESP32 mounted near a heater reads no sensors itself; it
+# subscribes to the temperature published by the bedroom sensor in example
+# 01 and turns a relay on when the value drops below a setpoint. No broker
+# is needed -- if the bedroom sensor is on the same link-local network,
+# this works even with the WAN unplugged.
+
+esphome:
+  name: bedroom-thermostat
+
+esp32:
+  board: esp32dev
+  framework:
+    type: esp-idf
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+
+logger:
+
+external_components:
+  - source:
+      type: git
+      url: https://github.com/pgenera/esphome-multicast
+      ref: main
+    components: [multicast_pubsub]
+
+multicast_pubsub:
+  scope: link-local
+
+# Receive the temperature as a plain sensor (default mode is subscribe).
+sensor:
+  - platform: multicast_pubsub
+    topic: "home/bedroom/temperature"
+    id: remote_temp
+    name: "Bedroom Temperature (received)"
+    unit_of_measurement: "°C"
+    accuracy_decimals: 2
+
+switch:
+  - platform: gpio
+    pin: GPIO5
+    id: heater_relay
+    name: "Bedroom Heater"
+
+# Simple bang-bang controller: turn on below 19°C, off above 21°C.
+interval:
+  - interval: 10s
+    then:
+      - if:
+          condition:
+            lambda: 'return id(remote_temp).state < 19.0;'
+          then:
+            - switch.turn_on: heater_relay
+      - if:
+          condition:
+            lambda: 'return id(remote_temp).state > 21.0;'
+          then:
+            - switch.turn_off: heater_relay

@@ -1,0 +1,21 @@
+# ESPHome build artifacts
+.esphome/
+tests/.esphome/
+
+# Native C++ test harness build outputs
+tests/unit/topic_hash_test
+tests/unit/wire_format_test
+tests/unit/*.o
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Cloned upstream esphome (used as read-only reference)
+esphome/
+
+# Editors
+*.swp
+.vscode/
+.idea/

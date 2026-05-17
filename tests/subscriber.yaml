@@ -1,0 +1,31 @@
+esphome:
+  name: pubsub-subscriber
+
+host:
+
+logger:
+  level: VERBOSE
+
+external_components:
+  - source:
+      type: local
+      path: ../components
+    components: [multicast_pubsub]
+
+multicast_pubsub:
+  port: 18512
+  scope: link-local
+  hops: 1
+  on_message:
+    - topic: "test/control"
+      then:
+        - logger.log:
+            format: "received control message of %u bytes"
+            args: ['x.size()']
+
+sensor:
+  - platform: multicast_pubsub
+    topic: "test/temp"
+    name: "Subscribed Temperature"
+    mode: subscribe
+    accuracy_decimals: 1

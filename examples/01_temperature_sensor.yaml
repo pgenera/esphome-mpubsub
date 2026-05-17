@@ -1,0 +1,49 @@
+# Example 1: Publish a real DHT temperature/humidity sensor
+#
+# This device reads a DHT22 once every 30 seconds and publishes the two
+# values to topics that any other ESPHome node (or external Python script)
+# can subscribe to without configuring a broker.
+
+esphome:
+  name: bedroom-sensor
+
+esp32:
+  board: esp32dev
+  framework:
+    type: esp-idf
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+
+logger:
+
+external_components:
+  - source:
+      type: git
+      url: https://github.com/pgenera/esphome-multicast
+      ref: main
+    components: [multicast_pubsub]
+
+multicast_pubsub:
+  scope: link-local
+
+sensor:
+  - platform: dht
+    pin: GPIO15
+    model: DHT22
+    temperature:
+      id: dht_temp
+      name: "Bedroom Temperature"
+      on_value:
+        - multicast_pubsub.publish:
+            topic: "home/bedroom/temperature"
+            payload: !lambda 'return esphome::str_sprintf("%.2f", x);'
+    humidity:
+      id: dht_humidity
+      name: "Bedroom Humidity"
+      on_value:
+        - multicast_pubsub.publish:
+            topic: "home/bedroom/humidity"
+            payload: !lambda 'return esphome::str_sprintf("%.1f", x);'
+    update_interval: 30s

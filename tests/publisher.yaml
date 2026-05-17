@@ -1,0 +1,36 @@
+esphome:
+  name: pubsub-publisher
+
+host:
+
+logger:
+  level: DEBUG
+
+external_components:
+  - source:
+      type: local
+      path: ../components
+    components: [multicast_pubsub]
+
+multicast_pubsub:
+  port: 18512
+  scope: link-local
+  hops: 1
+
+# Tick a synthetic value once a second and publish it.
+sensor:
+  - platform: template
+    id: source_temp
+    name: "Source Temperature"
+    lambda: 'return 20.0f + (millis() / 1000) % 10;'
+    update_interval: 1s
+  - platform: multicast_pubsub
+    id: published_temp
+    topic: "test/temp"
+    name: "Published Temperature"
+    mode: publish
+
+interval:
+  - interval: 1s
+    then:
+      - lambda: 'id(published_temp).publish_state(id(source_temp).state);'

@@ -1,0 +1,60 @@
+# Example 5: MQTT <-> multicast_pubsub bridge.
+#
+# One ESP32 on the network acts as a bidirectional bridge between Home
+# Assistant's MQTT broker and the brokerless multicast pub/sub fabric. This
+# lets you mix the two cleanly: cloud-style infrastructure where you have
+# it, broker-less LAN comms where you don't.
+#
+# Topic mapping (pick whatever convention you like):
+#   MQTT topic              <->  multicast_pubsub topic
+#   ha/bridge/from-mc/<t>   <--   <t>     (incoming multicast -> HA)
+#   ha/bridge/to-mc/<t>     -->   <t>     (HA -> outgoing multicast)
+#
+# To bridge a *specific* topic add an `on_message:` entry per direction
+# (multicast doesn't support MQTT wildcards directly).
+
+esphome:
+  name: pubsub-bridge
+
+esp32:
+  board: esp32dev
+  framework:
+    type: esp-idf
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+
+logger:
+
+external_components:
+  - source:
+      type: git
+      url: https://github.com/pgenera/esphome-multicast
+      ref: main
+    components: [multicast_pubsub]
+
+mqtt:
+  broker: !secret mqtt_broker
+  username: !secret mqtt_user
+  password: !secret mqtt_password
+  on_message:
+    # Anything HA publishes on `ha/bridge/to-mc/home/doorbell/front` we
+    # republish as a multicast pub/sub message on `home/doorbell/front`.
+    - topic: "ha/bridge/to-mc/home/doorbell/front"
+      then:
+        - multicast_pubsub.publish:
+            topic: "home/doorbell/front"
+            payload: !lambda 'return x;'
+
+multicast_pubsub:
+  scope: link-local
+  on_message:
+    # And the other direction: any multicast publication on
+    # `home/bedroom/temperature` is forwarded to MQTT for HA to ingest.
+    - topic: "home/bedroom/temperature"
+      then:
+        - mqtt.publish:
+            topic: "ha/bridge/from-mc/home/bedroom/temperature"
+            payload: !lambda |-
+              return std::string(reinterpret_cast<const char*>(x.data()), x.size());
