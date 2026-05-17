@@ -18,10 +18,10 @@ If a sentence in this document and a behavior in `reference.py` disagree,
   must use the same port. Chosen to sit one above the existing ESPHome
   `udp:` / `packet_transport:` default of 18511 (no IANA assignment in
   that neighborhood, no conflict with CoAP / mDNS).
-* **Datagram size:** maximum **508 bytes** end-to-end. This matches the
-  conservatively-safe IPv4 minimum-MTU figure that ESPHome's existing
-  `udp:` component uses; IPv6's true minimum MTU is 1280 but we stay at 508
-  for portability across encapsulation layers and to avoid IP fragmentation.
+* **Datagram size:** maximum **1232 bytes** end-to-end. This is IPv6's
+  minimum-MTU UDP payload: 1280 byte IPv6 minimum MTU (RFC 8200 §5) minus
+  the 40-byte IPv6 header and the 8-byte UDP header. Every RFC-compliant
+  IPv6 link is required to carry this size without fragmentation.
 
 ## 2. Topic → multicast group derivation
 
@@ -83,7 +83,7 @@ to compute it locally; the probe prints the group address as it starts.
        +----+----+----+----+----+----+----+----+----+----+----+----+----+
 ```
 
-Total: **12-byte header + up to 496 bytes payload = 508-byte datagram.**
+Total: **12-byte header + up to 1220 bytes payload = 1232-byte datagram.**
 
 | Offset | Size | Field        | Notes                                                          |
 |-------:|-----:|--------------|----------------------------------------------------------------|
@@ -93,7 +93,7 @@ Total: **12-byte header + up to 496 bytes payload = 508-byte datagram.**
 |      4 |    4 | `TOPIC_CRC32`| Little-endian CRC-32/IEEE 802.3 of the UTF-8 topic string      |
 |      8 |    2 | `PAYLOAD_LEN`| Little-endian uint16; must equal `len(datagram) - 12`          |
 |     10 |    2 | `RESERVED`   | Senders MUST write `0x00 0x00`. Receivers MUST ignore.         |
-|     12 |  ≤496| `PAYLOAD`    | Application-defined bytes                                      |
+|     12 | ≤1220| `PAYLOAD`    | Application-defined bytes                                      |
 
 ### 3.1 FLAGS
 
@@ -140,7 +140,7 @@ The C++ implementation surfaces (1)–(5) as a `DecodeError` enum
 
 A publisher MUST:
 
-* Reject a payload larger than **496 bytes**. The Python codegen for the
+* Reject a payload larger than **1220 bytes**. The Python codegen for the
   `multicast_pubsub.publish:` action rejects literal payloads above that
   size at config time. The runtime rejects oversize lambda payloads at
   `publish()` time and logs an `ERROR`.
@@ -183,7 +183,7 @@ them; if so it will bump `VERSION` to `0x02`.
   disclosure) is left to a future version. Right now IPv4-only networks
   cannot participate.
 * **Fragmentation.** A single publication is a single datagram; if your
-  payload won't fit in 496 bytes, chunk it at the application layer.
+  payload won't fit in 1220 bytes, chunk it at the application layer.
 
 ## 8. Differences from the original disclosure
 

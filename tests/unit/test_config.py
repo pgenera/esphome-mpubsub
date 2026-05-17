@@ -105,9 +105,9 @@ def test_rejects_oversize_topic_on_message(tmp_path: Path) -> None:
 
 
 def test_rejects_oversize_static_payload(tmp_path: Path) -> None:
-    # The Python codegen knows MAX_PAYLOAD=496 and must reject statically-
+    # The Python codegen knows MAX_PAYLOAD=1220 and must reject statically-
     # known publish payloads above it at config time, before the device boots.
-    big = "x" * 497
+    big = "x" * 1221
     body = (
         "multicast_pubsub:\n"
         "  id: pubsub\n"
@@ -124,12 +124,12 @@ def test_rejects_oversize_static_payload(tmp_path: Path) -> None:
     r = _esphome_config(_wrap(body), tmp_path)
     assert r.returncode != 0
     combined = (r.stdout + r.stderr).lower()
-    assert "maximum publishable size" in combined or "496" in combined, combined
+    assert "maximum publishable size" in combined or "1220" in combined, combined
 
 
 def test_accepts_max_size_static_payload(tmp_path: Path) -> None:
-    # Exactly MAX_PAYLOAD bytes (496) must still validate.
-    payload = "x" * 496
+    # Exactly MAX_PAYLOAD bytes (1220) must still validate.
+    payload = "x" * 1220
     body = (
         "multicast_pubsub:\n"
         "  id: pubsub\n"

@@ -36,9 +36,11 @@ SCOPES = {
 }
 
 # Mirrors components/multicast_pubsub/wire_format.h. Hard cap.
-MAX_DATAGRAM = 508
+# IPv6 minimum MTU (1280, RFC 8200 §5) minus IPv6 header (40) minus UDP
+# header (8) = 1232 bytes deliverable on any IPv6 link without fragmentation.
+MAX_DATAGRAM = 1232
 HEADER_LEN = 12
-MAX_PAYLOAD = MAX_DATAGRAM - HEADER_LEN  # 496
+MAX_PAYLOAD = MAX_DATAGRAM - HEADER_LEN  # 1220
 
 
 def _static_payload_validator(value):

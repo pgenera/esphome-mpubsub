@@ -22,8 +22,11 @@ constexpr uint8_t MAGIC0 = 'M';
 constexpr uint8_t MAGIC1 = 'P';
 constexpr uint8_t VERSION = 0x01;
 constexpr size_t HEADER_LEN = 12;
-constexpr size_t MAX_DATAGRAM = 508;
-constexpr size_t MAX_PAYLOAD = MAX_DATAGRAM - HEADER_LEN;
+// IPv6 minimum MTU (1280, RFC 8200 §5) minus the 40-byte IPv6 header and
+// 8-byte UDP header = 1232 bytes of UDP payload guaranteed deliverable on
+// any RFC-compliant IPv6 link without fragmentation.
+constexpr size_t MAX_DATAGRAM = 1232;
+constexpr size_t MAX_PAYLOAD = MAX_DATAGRAM - HEADER_LEN;  // 1220
 
 enum WireFlag : uint8_t {
   FLAG_TEXT = 0x01,

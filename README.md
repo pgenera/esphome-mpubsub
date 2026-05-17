@@ -49,7 +49,7 @@ on_...:
 
 ## Wire protocol (v1)
 
-Each publication is a single UDP datagram (≤ 508 bytes) sent to the topic's
+Each publication is a single UDP datagram (≤ 1232 bytes — IPv6's minimum-MTU UDP payload) sent to the topic's
 multicast group on port 18512 (configurable).
 
 ### IPv6 multicast group derivation
@@ -84,7 +84,7 @@ This yields exactly 112 bits of topic entropy per the spec.
 |      4 |    4 | TOPIC_CRC32  | CRC-32/IEEE of the UTF-8 topic string, LE          |
 |      8 |    2 | PAYLOAD_LEN  | uint16 LE; must equal `len(datagram) - 12`         |
 |     10 |    2 | RESERVED     | Senders MUST write `0x00 0x00`; receivers MUST ignore (forward-compat) |
-|     12 |  ≤496| PAYLOAD      | Opaque bytes                                       |
+|     12 | ≤1220| PAYLOAD      | Opaque bytes                                       |
 
 Receivers MUST drop the datagram silently if the magic is wrong, the version
 is unknown, reserved flag bits are set, the length field is inconsistent, or

@@ -40,7 +40,7 @@ on_...:
 |-----------|:--------:|------------------|----------------------------------------------------------------------------------------|
 | `id`      | no       | id               | Pick a specific `multicast_pubsub:` instance.                                          |
 | `topic`   | yes      | templatable str  | UTF-8, non-empty, ≤200 bytes, no NUL.                                                  |
-| `payload` | yes      | templatable str  | Raw bytes-as-string. Maximum 496 bytes; literals over the limit are rejected at config time. |
+| `payload` | yes      | templatable str  | Raw bytes-as-string. Maximum 1220 bytes; literals over the limit are rejected at config time. |
 
 If `payload` is a runtime lambda we can't size-check at config time. An
 oversize payload at runtime is logged at `ERROR` level and the publish call
