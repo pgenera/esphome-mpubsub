@@ -74,33 +74,21 @@ where `PAYLOAD_LEN = 2 + len(protobuf bytes)`.
 
 ## SCHEMA_ID derivation
 
-A schema's id is the FNV-1a-16 hash of its **canonicalized definition**:
+A schema's id is the low 16 bits of CRC-32/IEEE of its **canonicalized
+definition**:
 
 1. Fields sorted by tag number ascending.
 2. Each rendered as `"<tag>:<type>:<name>"` (no whitespace).
 3. Lines joined with `"\n"`, no trailing newline.
 4. Encoded as UTF-8.
+5. `SCHEMA_ID = topic_crc32(canonical) & 0xFFFF`.
 
-Reference Python:
-```python
-FNV_OFFSET_16 = 0x811C
-FNV_PRIME = 0x100000001B3  # standard FNV prime, truncate at 16 bits
-
-def schema_id(fields) -> int:
-    canon = "\n".join(
-        f"{f.tag}:{f.type}:{f.name}"
-        for f in sorted(fields, key=lambda x: x.tag)
-    ).encode("utf-8")
-    h = FNV_OFFSET_16
-    for b in canon:
-        h = ((h ^ b) * FNV_PRIME) & 0xFFFF
-    return h
-```
-
-Two devices declaring an identical schema compute the same `SCHEMA_ID`.
-Adding/renaming a field, changing a type, or changing a tag all change
-the id — a stale subscriber will drop new publishers' packets at the
-schema-id check rather than mis-decode them.
+Reuses the same CRC-32 implementation that produces `TOPIC_CRC32` — one
+hash family in the codebase. Two devices that declare an identical
+schema compute the same `SCHEMA_ID`. Adding/renaming a field, changing
+a type, or changing a tag all change the id — a stale subscriber will
+drop new publishers' packets at the schema-id check rather than
+mis-decode them.
 
 16 bits over a few dozen schemas per device gives a practically-zero
 false-match rate; the 112-bit IPv6 group hash already filters by topic.
@@ -194,9 +182,41 @@ both, declare two `on_message:` entries.
 Composite:
 * `repeated <scalar>` — list of any scalar above; numerics use packed
   encoding. C++ representation `std::vector<T>`.
-* Nested messages — **deferred**. Workaround: flatten the schema.
+* **Nested messages — YAML codegen does not support them.** Workaround
+  in YAML: flatten the schema. In C++ code (`DynamicMessage` or hand-
+  written encoders) nested messages **are** fully supported — see the
+  Nested-messages-in-C++ section below.
 * Enums — **deferred**. Workaround: `int32` with named constants in the
   lambda.
+
+### Nested messages in C++
+
+`DynamicMessage` exposes nesting as a length-delimited field whose
+payload is itself another `DynamicMessage`:
+
+```cpp
+DynamicMessage location;
+location.add_float(1, lat);
+location.add_float(2, lon);
+
+DynamicMessage event;
+event.add_uint32(1, sensor_id);
+event.add_message(2, location);            // tag 2 = embedded message
+event.add_string(3, "motion");
+```
+
+`DynamicReader::Field` likewise supports `as_message()` returning a
+nested `DynamicReader` view. Codegen-emitted typed structs may also
+contain a `std::optional<SubStruct>` or `std::vector<SubStruct>` member
+if a developer extends the codegen template manually; the YAML schema
+just doesn't declare these declaratively today.
+
+Rationale: nested types pull in a bunch of edge cases for YAML
+validation (recursive schema references, cyclic type checks, codegen
+ordering) that aren't worth shipping in v1 of the typed feature. The
+escape hatch via `DynamicMessage` covers the use cases that actually
+need nesting (bridges, complex telemetry) without bloating the YAML
+surface.
 
 ## C++ code generation
 
@@ -229,16 +249,13 @@ with.
 
 ### Dependency on `api:`
 
-`ProtoWriteBuffer` lives in `esphome/components/api/proto.h`. Two paths:
+`ProtoWriteBuffer` lives in `esphome/components/api/proto.h`. We depend
+on the full `api:` component (`DEPENDENCIES = ["api"]`), accepting the
+~10 KB of `api_server.cpp` etc. that comes along for devices that
+wouldn't otherwise enable the native API. Simple, works today.
 
-1. **`DEPENDENCIES = ["api"]`** — drags in `api_server.cpp` (~10 KB
-   unnecessary). Works today.
-2. **Upstream `api_proto` leaf sub-component** — factor `proto.{h,cpp}`
-   out so we depend only on the encoding primitives. Requires a small
-   PR to ESPHome.
-
-Ship with (1), open the upstream PR for (2) in parallel, swap when it
-merges.
+A leaner `api_proto` leaf sub-component is a possible future upstream
+PR but not a blocker for this work.
 
 ## Publish / subscribe API (C++)
 
@@ -328,7 +345,7 @@ class DynamicReader {
 ### Add
 * `components/multicast_pubsub/proto_emitter.py` — schema-to-C++ codegen.
 * `components/multicast_pubsub/dynamic_message.{h,cpp}` — `DynamicMessage`
-  / `DynamicReader`.
+  / `DynamicReader` (supports `add_message` / `as_message` for nesting).
 * `tests/unit/test_schema_id.py` — locked golden vectors.
 * `tests/unit/test_protobuf_roundtrip.py` — generated struct encode→decode.
 * `tests/unit/test_dynamic_message.py` — builder/reader round-trip.
@@ -370,20 +387,20 @@ class DynamicReader {
 * **Compression.** Reserved as future `ENCODING` values
   (`0x02 = COMPRESSED_RAW`, `0x03 = COMPRESSED_PROTOBUF`). Algorithm
   picked then — miniz if `web_server:` is enabled, else heatshrink.
-* **Nested messages.** Flatten the schema for now.
+* **Nested messages in YAML.** Supported in C++ via `DynamicMessage`;
+  YAML codegen support deferred.
 * **Enums.** Use `int32` + named constants in lambdas for now.
 * **Self-describing schema announcements.** Cute, complicated; not now.
 * **Optional fields with explicit `present` bit.** Currently every scalar
   has a zero/empty default; distinguishing "unset" from "zero" costs
   wire bytes. Defer.
 
-## Open questions
+## Decisions resolved
 
-* Should `messages:` live under top-level `multicast_pubsub:` (proposed)
-  or be its own top-level key? Lean: under `multicast_pubsub:`, users
-  who want shared schemas can `!include` the inner list.
-* Log schema-id mismatches at `ESP_LOGV` to help debug stale deploys?
-  Yes — visible only at verbose log levels, no spam in normal runs.
+* `messages:` nests **under top-level `multicast_pubsub:`**. Users who
+  want shared schemas across devices can `!include` the inner list.
+* Schema-id mismatches log at `ESP_LOGV` (visible only at verbose log
+  levels, no spam in normal runs).
 
 ## Implementation order
 
