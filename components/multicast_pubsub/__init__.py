@@ -43,6 +43,7 @@ CONF_MESSAGES = "messages"
 CONF_FIELDS = "fields"
 CONF_TAG = "tag"
 CONF_MESSAGE = "message"
+CONF_REPEATED = "repeated"
 
 SCOPES = {
     "link-local": Scope.LINK_LOCAL,
@@ -131,6 +132,7 @@ FIELD_SCHEMA = cv.Schema(
         cv.Required(CONF_NAME): _field_name_validator,
         cv.Required(CONF_TYPE): _field_type_validator,
         cv.Required(CONF_TAG): _field_tag_validator,
+        cv.Optional(CONF_REPEATED, default=False): cv.boolean,
     }
 )
 
@@ -152,7 +154,12 @@ def _message_validator(value):
     msg = proto_emitter.Message(
         id=value[CONF_ID],
         fields=tuple(
-            proto_emitter.Field(name=f[CONF_NAME], type=f[CONF_TYPE], tag=f[CONF_TAG])
+            proto_emitter.Field(
+                name=f[CONF_NAME],
+                type=f[CONF_TYPE],
+                tag=f[CONF_TAG],
+                repeated=f[CONF_REPEATED],
+            )
             for f in value[CONF_FIELDS]
         ),
     )
@@ -274,7 +281,12 @@ async def to_code(config):
         msg = proto_emitter.Message(
             id=msg_cfg[CONF_ID],
             fields=tuple(
-                proto_emitter.Field(name=f[CONF_NAME], type=f[CONF_TYPE], tag=f[CONF_TAG])
+                proto_emitter.Field(
+                    name=f[CONF_NAME],
+                    type=f[CONF_TYPE],
+                    tag=f[CONF_TAG],
+                    repeated=f[CONF_REPEATED],
+                )
                 for f in msg_cfg[CONF_FIELDS]
             ),
         )

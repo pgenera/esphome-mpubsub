@@ -67,6 +67,7 @@ class Field:
     name: str
     type: str
     tag: int
+    repeated: bool = False
 
 
 @dataclass(frozen=True)
@@ -79,14 +80,20 @@ def canonical_schema_string(msg: Message) -> str:
     """Return the canonical form of a schema, used to compute SCHEMA_ID.
 
     Format: fields sorted by tag, each rendered as ``<tag>:<type>:<name>``
-    (no whitespace), lines joined with ``\\n``, no trailing newline.
+    with a ``repeated `` prefix on the type for list fields, lines joined
+    with ``\\n``, no trailing newline.
 
     The canonical form is independent of YAML key order or field declaration
     order, so two devices declaring the same schema in different orderings
-    still compute the same SCHEMA_ID.
+    still compute the same SCHEMA_ID. Changing a field from singular to
+    repeated (or vice versa) changes the SCHEMA_ID, since the wire format
+    differs.
     """
+    def _typestr(f: Field) -> str:
+        return f"repeated {f.type}" if f.repeated else f.type
+
     lines = sorted(
-        f"{f.tag}:{f.type}:{f.name}" for f in msg.fields
+        f"{f.tag}:{_typestr(f)}:{f.name}" for f in msg.fields
     )
     return "\n".join(lines)
 
@@ -137,11 +144,31 @@ def validate(msg: Message) -> None:
 
 def _emit_member(f: Field) -> str:
     info = TYPE_INFO[f.type]
+    if f.repeated:
+        # Repeated fields are always std::vector<CppType>, default-empty.
+        return f"  std::vector<{info['cpp']}> {f.name};"
     return f"  {info['cpp']} {f.name}{{{info['default']}}};"
 
 
 def _emit_encode_call(f: Field) -> str:
     info = TYPE_INFO[f.type]
+    if f.repeated:
+        # Unpacked repeated encoding: emit one tag+value pair per element.
+        # `force=true` so zero/empty elements are still written -- repeated
+        # fields preserve all elements, not just non-default ones.
+        if f.type == "bytes":
+            return (
+                f"    for (const auto &v : this->{f.name}) {{\n"
+                f"      esphome::api::ProtoEncode::encode_bytes("
+                f"pos PROTO_ENCODE_DEBUG_ARG, {f.tag}, v.data(), v.size(), true);\n"
+                f"    }}"
+            )
+        return (
+            f"    for (const auto &v : this->{f.name}) {{\n"
+            f"      esphome::api::ProtoEncode::{info['encoder']}("
+            f"pos PROTO_ENCODE_DEBUG_ARG, {f.tag}, v, true);\n"
+            f"    }}"
+        )
     if f.type == "bytes":
         # encode_bytes takes (pos, field_id, const uint8_t*, size_t, force) --
         # no std::vector overload, so expand the vector here.
@@ -171,50 +198,51 @@ def _emit_decode_overrides(msg: Message) -> str:
 
     Each override is a switch on field_id. Unknown fields return false,
     which causes ProtoDecodableMessage to skip them gracefully.
+
+    Repeated fields append (push_back); singular fields assign.
     """
     varint_cases: list[str] = []
     length_cases: list[str] = []
     fixed32_cases: list[str] = []
     for f in msg.fields:
         info = TYPE_INFO[f.type]
-        if info["wire"] == 0:  # varint
+        # Compute the inner expression that converts the wire value to the
+        # field's C++ element type. Common to both singular and repeated.
+        if info["wire"] == 0:
             if f.type == "bool":
                 expr = "value != 0"
-            elif f.type in ("sint32",):
+            elif f.type == "sint32":
                 expr = "esphome::api::decode_zigzag32(static_cast<uint32_t>(value))"
-            elif f.type in ("sint64",):
+            elif f.type == "sint64":
                 expr = "esphome::api::decode_zigzag64(static_cast<uint64_t>(value))"
-            elif f.type in ("int32", "uint32"):
-                expr = f"static_cast<{info['cpp']}>(value)"
-            elif f.type in ("int64", "uint64"):
+            elif f.type in ("int32", "uint32", "int64", "uint64"):
                 expr = f"static_cast<{info['cpp']}>(value)"
             else:
                 raise AssertionError(f"unhandled varint type {f.type}")
-            varint_cases.append(
-                f"      case {f.tag}: this->{f.name} = {expr}; return true;"
-            )
-        elif info["wire"] == 5:  # fixed32 (float)
-            length_or_32 = "fixed32_cases"
-            expr = "value.as_float()" if f.type == "float" else f"value.as_fixed32()"
-            fixed32_cases.append(
-                f"      case {f.tag}: this->{f.name} = {expr}; return true;"
-            )
-        elif info["wire"] == 2:  # length-delimited
+        elif info["wire"] == 5:
+            expr = "value.as_float()" if f.type == "float" else "value.as_fixed32()"
+        elif info["wire"] == 2:
             if f.type == "string":
-                expr = (
-                    "std::string(reinterpret_cast<const char *>(value.data()), value.size())"
-                )
+                expr = "std::string(reinterpret_cast<const char *>(value.data()), value.size())"
             elif f.type == "bytes":
-                expr = (
-                    "std::vector<uint8_t>(value.data(), value.data() + value.size())"
-                )
+                expr = "std::vector<uint8_t>(value.data(), value.data() + value.size())"
             else:
                 raise AssertionError(f"unhandled length-delim type {f.type}")
-            length_cases.append(
-                f"      case {f.tag}: this->{f.name} = {expr}; return true;"
-            )
         else:
             raise AssertionError(f"unsupported wire type {info['wire']}")
+
+        # Repeated fields push_back; singular fields assign.
+        if f.repeated:
+            case = f"      case {f.tag}: this->{f.name}.push_back({expr}); return true;"
+        else:
+            case = f"      case {f.tag}: this->{f.name} = {expr}; return true;"
+
+        if info["wire"] == 0:
+            varint_cases.append(case)
+        elif info["wire"] == 5:
+            fixed32_cases.append(case)
+        elif info["wire"] == 2:
+            length_cases.append(case)
 
     def _block(cases: list[str], method: str, arg_type: str) -> str:
         if not cases:
@@ -247,7 +275,38 @@ def _emit_call_setters(msg: Message, struct_name: str) -> str:
         info = TYPE_INFO[f.type]
         arg = info["setter_arg"]
         category = info["call_category"]
+        cpp = info["cpp"]
         n = f.name
+        if f.repeated:
+            # Repeated fields use proto-style add_X (push one) plus the
+            # bulk set_X(vector) / clear_X(). No optional<T> overload --
+            # "is this list set" doesn't fit the repeated semantic.
+            lines.append(
+                f"    Call &add_{n}({arg} value) {{ this->msg_.{n}.push_back(value); return *this; }}"
+            )
+            if category == "string":
+                lines.append(
+                    f"    Call &add_{n}(const char *value) {{ "
+                    f"this->msg_.{n}.emplace_back(value); return *this; }}"
+                )
+            if category == "bytes":
+                lines.append(
+                    f"    Call &add_{n}(const uint8_t *data, size_t len) {{ "
+                    f"this->msg_.{n}.emplace_back(data, data + len); return *this; }}"
+                )
+                lines.append(
+                    f"    Call &add_{n}(std::span<const uint8_t> data) {{ "
+                    f"this->msg_.{n}.emplace_back(data.begin(), data.end()); return *this; }}"
+                )
+            lines.append(
+                f"    Call &set_{n}(std::vector<{cpp}> values) {{ "
+                f"this->msg_.{n} = std::move(values); return *this; }}"
+            )
+            lines.append(
+                f"    Call &clear_{n}() {{ this->msg_.{n}.clear(); return *this; }}"
+            )
+            continue
+        # Singular fields ----------------------------------------------------
         if category == "scalar":
             opt = f"esphome::optional<{info['cpp']}>"
             lines.append(
@@ -259,8 +318,6 @@ def _emit_call_setters(msg: Message, struct_name: str) -> str:
             )
         elif category == "string":
             opt = "esphome::optional<std::string>"
-            # const char * overload so callers can pass a string literal without
-            # constructing a std::string at the call site.
             lines.append(
                 f"    Call &set_{n}({arg} value) {{ this->msg_.{n} = value; return *this; }}"
             )
@@ -272,7 +329,6 @@ def _emit_call_setters(msg: Message, struct_name: str) -> str:
                 f"if (value.has_value()) this->msg_.{n} = *value; return *this; }}"
             )
         elif category == "bytes":
-            # bytes accepts a vector (by move), a (ptr,len) pair, or a span.
             lines.append(
                 f"    Call &set_{n}({arg} value) {{ this->msg_.{n} = std::move(value); return *this; }}"
             )

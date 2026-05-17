@@ -27,6 +27,11 @@ multicast_pubsub:
         - { name: temperature, type: float,  tag: 1 }
         - { name: humidity,    type: float,  tag: 2 }
         - { name: room_id,     type: string, tag: 3 }
+    - id: door_events
+      fields:
+        - { name: door_id, type: string, tag: 1 }
+        - { name: open_at, type: uint32, tag: 2, repeated: true }
+        - { name: tags,    type: string, tag: 3, repeated: true }
   on_message:
     # Typed receive: x is a decoded RoomClimate struct
     - topic: "test/climate"
@@ -35,3 +40,16 @@ multicast_pubsub:
         - logger.log:
             format: "typed receive: temperature=%.2f humidity=%.2f room='%s'"
             args: ['x.temperature', 'x.humidity', 'x.room_id.c_str()']
+
+    # Typed receive with repeated fields. x.open_at and x.tags are
+    # std::vector<>s -- iterate to render contents.
+    - topic: "test/door"
+      message: door_events
+      then:
+        - lambda: |-
+            std::string ts_str;
+            for (auto t : x.open_at) { ts_str += std::to_string(t) + ","; }
+            std::string tag_str;
+            for (const auto &s : x.tags) { tag_str += s + ","; }
+            ESP_LOGD("main", "typed repeated: door='%s' open_at=[%s] tags=[%s]",
+                     x.door_id.c_str(), ts_str.c_str(), tag_str.c_str());

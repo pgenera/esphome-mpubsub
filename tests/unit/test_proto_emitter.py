@@ -21,6 +21,7 @@ from proto_emitter import (  # noqa: E402
     Field,
     Message,
     TYPE_INFO,
+    canonical_schema_string,
     emit_struct,
     schema_id,
 )
@@ -226,6 +227,79 @@ def test_call_perform_publishes_via_parent_template() -> None:
     # Out-of-line perform definition uses publish<T>(topic, msg)
     assert "::Call::perform()" in src
     assert "this->parent_->publish(this->topic_, this->msg_)" in src
+
+
+# ---------------------------------------------------------------------------
+# Repeated fields
+# ---------------------------------------------------------------------------
+
+
+def _struct_with_repeated(name: str, type_name: str, tag: int = 1) -> str:
+    msg = Message(id="m", fields=(Field(name, type_name, tag, repeated=True),))
+    return emit_struct(msg)
+
+
+def test_repeated_member_uses_vector_of_cpp_type() -> None:
+    src = _struct_with_repeated("values", "float")
+    assert "std::vector<float> values;" in src
+    # Default-empty -- no {{default}} initializer.
+    assert "std::vector<float> values{" not in src
+
+
+def test_repeated_encode_emits_loop_with_force_true() -> None:
+    src = _struct_with_repeated("values", "float", tag=3)
+    # for loop over the field, force=true so zero elements still get written
+    assert "for (const auto &v : this->values)" in src
+    assert "encode_float(pos PROTO_ENCODE_DEBUG_ARG, 3, v, true);" in src
+
+
+def test_repeated_encode_for_bytes_calls_data_size() -> None:
+    src = _struct_with_repeated("blobs", "bytes", tag=4)
+    assert "for (const auto &v : this->blobs)" in src
+    assert "encode_bytes(pos PROTO_ENCODE_DEBUG_ARG, 4, v.data(), v.size(), true);" in src
+
+
+def test_repeated_decode_appends_via_push_back() -> None:
+    src = _struct_with_repeated("values", "int32", tag=5)
+    assert "case 5: this->values.push_back(" in src
+
+
+def test_repeated_call_has_add_set_clear() -> None:
+    src = _struct_with_repeated("values", "float")
+    assert "Call &add_values(float value)" in src
+    assert "this->msg_.values.push_back(value);" in src
+    assert "Call &set_values(std::vector<float> values)" in src
+    assert "this->msg_.values = std::move(values);" in src
+    assert "Call &clear_values()" in src
+    assert "this->msg_.values.clear();" in src
+    # No optional<T> overload for repeated fields.
+    assert "esphome::optional<float>" not in src
+
+
+def test_repeated_string_call_includes_const_char_add() -> None:
+    src = _struct_with_repeated("names", "string")
+    assert "Call &add_names(const std::string & value)" in src
+    assert "Call &add_names(const char *value)" in src
+    assert "this->msg_.names.emplace_back(value);" in src
+
+
+def test_repeated_bytes_call_includes_ptr_and_span_overloads() -> None:
+    src = _struct_with_repeated("blobs", "bytes")
+    assert "Call &add_blobs(std::vector<uint8_t> value)" in src
+    assert "Call &add_blobs(const uint8_t *data, size_t len)" in src
+    assert "Call &add_blobs(std::span<const uint8_t> data)" in src
+
+
+def test_repeated_changes_schema_id() -> None:
+    from proto_emitter import schema_id
+    a = Message(id="m", fields=(Field("v", "float", 1, repeated=False),))
+    b = Message(id="m", fields=(Field("v", "float", 1, repeated=True),))
+    assert schema_id(a) != schema_id(b)
+
+
+def test_repeated_appears_in_canonical_form() -> None:
+    msg = Message(id="m", fields=(Field("values", "float", 1, repeated=True),))
+    assert canonical_schema_string(msg) == "1:repeated float:values"
 
 
 def test_kitchen_sink_message() -> None:

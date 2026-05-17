@@ -32,6 +32,14 @@ multicast_pubsub:
         - { name: temperature, type: float,  tag: 1 }
         - { name: humidity,    type: float,  tag: 2 }
         - { name: room_id,     type: string, tag: 3 }
+    - id: door_events
+      fields:
+        - { name: door_id, type: string,  tag: 1 }
+        # Repeated fields: a list of recent open-timestamps (in seconds
+        # since boot) plus a list of free-form event tags. Exercises both
+        # numeric and string repeated wire paths end-to-end.
+        - { name: open_at, type: uint32,  tag: 2, repeated: true }
+        - { name: tags,    type: string,  tag: 3, repeated: true }
 
 sensor:
   - platform: template
@@ -57,4 +65,19 @@ interval:
               .set_temperature(id(source_temp).state)
               .set_humidity(id(source_hum).state)
               .set_room_id("test-room")
+              .perform();
+
+  - interval: 2s
+    then:
+      # Repeated-field exercise: publishes a DoorEvents message with two
+      # open-timestamps and two tag strings. Each add_X() chains.
+      - lambda: |-
+          using esphome::multicast_pubsub::messages::DoorEvents;
+          uint32_t now = millis() / 1000;
+          id(pubsub)->make_call<DoorEvents>("test/door")
+              .set_door_id("front")
+              .add_open_at(now)
+              .add_open_at(now - 30)
+              .add_tags("button")
+              .add_tags("auto")
               .perform();
