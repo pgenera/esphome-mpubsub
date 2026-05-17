@@ -8,14 +8,25 @@ import esphome.codegen as cg
 import esphome.config_validation as cv
 from esphome.const import (
     CONF_ID,
+    CONF_NAME,
     CONF_PAYLOAD,
     CONF_PORT,
     CONF_TOPIC,
     CONF_TRIGGER_ID,
+    CONF_TYPE,
 )
+
+from esphome import final_validate as fv
+
+from . import proto_emitter
 
 CODEOWNERS = ["@pgenera"]
 DEPENDENCIES = ["network"]
+# We AUTO_LOAD `api` only when the user actually declares typed messages:
+# in to_code below. Devices using only raw publish/subscribe don't pay the
+# ~10KB cost of the API server. (A future upstream refactor splitting
+# api/proto.{h,cpp} into a leaf `api_proto` sub-component would let us
+# bring in only the protobuf primitives without the server runtime.)
 AUTO_LOAD = ["socket"]
 MULTI_CONF = True
 
@@ -28,6 +39,9 @@ OnMessageTrigger = multicast_pubsub_ns.class_("OnMessageTrigger", automation.Tri
 CONF_SCOPE = "scope"
 CONF_HOPS = "hops"
 CONF_ON_MESSAGE = "on_message"
+CONF_MESSAGES = "messages"
+CONF_FIELDS = "fields"
+CONF_TAG = "tag"
 
 SCOPES = {
     "link-local": Scope.LINK_LOCAL,
@@ -59,6 +73,106 @@ def _static_payload_validator(value):
     return value
 
 
+def _message_id_validator(value):
+    """Validate a typed-message id (used to reference the message from publish
+    actions and on_message triggers).
+
+    Restrict to identifier-like strings so the generated C++ type name is
+    sane: alphanumeric + underscore/hyphen, starts with a letter.
+    """
+    value = cv.string_strict(value)
+    if not value:
+        raise cv.Invalid("message id must be non-empty")
+    if not (value[0].isalpha() or value[0] == "_"):
+        raise cv.Invalid(f"message id {value!r} must start with a letter or underscore")
+    for c in value:
+        if not (c.isalnum() or c in "_-"):
+            raise cv.Invalid(
+                f"message id {value!r}: invalid character {c!r} (allowed: alphanumeric, _, -)"
+            )
+    return value
+
+
+def _field_name_validator(value):
+    value = cv.string_strict(value)
+    if not value:
+        raise cv.Invalid("field name must be non-empty")
+    if not (value[0].isalpha() or value[0] == "_"):
+        raise cv.Invalid(f"field name {value!r} must start with a letter or underscore")
+    for c in value:
+        if not (c.isalnum() or c == "_"):
+            raise cv.Invalid(
+                f"field name {value!r}: invalid character {c!r} (allowed: alphanumeric, _)"
+            )
+    return value
+
+
+def _field_type_validator(value):
+    value = cv.string_strict(value)
+    if value not in proto_emitter.VALID_TYPES:
+        raise cv.Invalid(
+            f"unknown field type {value!r}. Valid: {sorted(proto_emitter.VALID_TYPES)}"
+        )
+    return value
+
+
+def _field_tag_validator(value):
+    value = cv.positive_int(value)
+    if not (1 <= value <= 536_870_911):
+        raise cv.Invalid(f"field tag {value} out of range (1..536870911)")
+    if 19000 <= value <= 19999:
+        raise cv.Invalid(f"field tag {value} is in proto3's reserved range 19000..19999")
+    return value
+
+
+FIELD_SCHEMA = cv.Schema(
+    {
+        cv.Required(CONF_NAME): _field_name_validator,
+        cv.Required(CONF_TYPE): _field_type_validator,
+        cv.Required(CONF_TAG): _field_tag_validator,
+    }
+)
+
+
+def _message_validator(value):
+    """Validate a single message declaration and raise the cv-friendly form
+    of any proto_emitter errors."""
+    schema = cv.Schema(
+        {
+            cv.Required(CONF_ID): _message_id_validator,
+            cv.Required(CONF_FIELDS): cv.All(
+                cv.ensure_list(FIELD_SCHEMA), cv.Length(min=1)
+            ),
+        }
+    )
+    value = schema(value)
+    # Run the emitter's structural validation (duplicate tags etc) and
+    # surface anything it complains about as a cv.Invalid.
+    msg = proto_emitter.Message(
+        id=value[CONF_ID],
+        fields=tuple(
+            proto_emitter.Field(name=f[CONF_NAME], type=f[CONF_TYPE], tag=f[CONF_TAG])
+            for f in value[CONF_FIELDS]
+        ),
+    )
+    try:
+        proto_emitter.validate(msg)
+    except ValueError as e:
+        raise cv.Invalid(str(e)) from e
+    return value
+
+
+def _messages_validator(value):
+    """Validate the top-level messages: list and ensure ids are unique."""
+    value = cv.ensure_list(_message_validator)(value)
+    seen_ids = set()
+    for msg in value:
+        if msg[CONF_ID] in seen_ids:
+            raise cv.Invalid(f"duplicate message id: {msg[CONF_ID]!r}")
+        seen_ids.add(msg[CONF_ID])
+    return value
+
+
 def _topic_validator(value):
     """Validate a pub/sub topic.
 
@@ -82,6 +196,7 @@ CONFIG_SCHEMA = cv.Schema(
         cv.Optional(CONF_PORT, default=18512): cv.port,
         cv.Optional(CONF_SCOPE, default="link-local"): cv.enum(SCOPES, lower=True),
         cv.Optional(CONF_HOPS, default=1): cv.int_range(min=1, max=255),
+        cv.Optional(CONF_MESSAGES, default=list): _messages_validator,
         cv.Optional(CONF_ON_MESSAGE): automation.validate_automation(
             {
                 cv.GenerateID(CONF_TRIGGER_ID): cv.declare_id(OnMessageTrigger),
@@ -92,7 +207,45 @@ CONFIG_SCHEMA = cv.Schema(
 ).extend(cv.COMPONENT_SCHEMA)
 
 
+def _require_api_when_using_messages(config):
+    """Final-validate hook: if the user declared typed messages, the api:
+    component must also be configured (we depend on its protobuf
+    primitives in components/api/proto.h)."""
+    if not config.get(CONF_MESSAGES):
+        return config
+    full = fv.full_config.get()
+    if "api" not in full:
+        raise cv.Invalid(
+            "multicast_pubsub `messages:` requires the `api:` component to be "
+            "configured (used for protobuf encoding primitives). Add an "
+            "`api:` section to your YAML, or remove the `messages:` block to "
+            "stick to raw payloads.",
+            path=[CONF_MESSAGES],
+        )
+    return config
+
+
+FINAL_VALIDATE_SCHEMA = _require_api_when_using_messages
+
+
 async def to_code(config):
+    # Typed messages reference esphome::api::ProtoEncode / ProtoDecodableMessage,
+    # so pull in proto.h from the api component (presence enforced by
+    # FINAL_VALIDATE_SCHEMA above).
+    if config.get(CONF_MESSAGES):
+        cg.add_global(cg.RawExpression(
+            '#include "esphome/components/api/proto.h"'
+        ))
+    for msg_cfg in config.get(CONF_MESSAGES, []):
+        msg = proto_emitter.Message(
+            id=msg_cfg[CONF_ID],
+            fields=tuple(
+                proto_emitter.Field(name=f[CONF_NAME], type=f[CONF_TYPE], tag=f[CONF_TAG])
+                for f in msg_cfg[CONF_FIELDS]
+            ),
+        )
+        cg.add_global(cg.RawExpression(proto_emitter.emit_struct(msg)))
+
     var = cg.new_Pvariable(config[CONF_ID])
     await cg.register_component(var, config)
     cg.add(var.set_port(config[CONF_PORT]))

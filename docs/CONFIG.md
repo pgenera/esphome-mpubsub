@@ -8,6 +8,12 @@ multicast_pubsub:
   port: 18512                   # uint16, default 18512
   scope: link-local             # link-local | site-local | organization-local
   hops: 1                       # uint8 1..255, default 1
+  messages:                     # optional list of typed message schemas
+    - id: room_climate
+      fields:
+        - { name: temperature, type: float,  tag: 1 }
+        - { name: humidity,    type: float,  tag: 2 }
+        - { name: room_id,     type: string, tag: 3 }
   on_message:                   # list of topic-specific triggers
     - topic: "..."
       then:
@@ -21,6 +27,7 @@ multicast_pubsub:
 | `scope`      | no       | enum     | `link-local`  | IPv6 multicast scope. See `docs/PROTOCOL.md` §2.1.                          |
 | `hops`       | no       | int 1–255| `1`           | `IPV6_MULTICAST_HOPS`. Raise above 1 if you need multi-subnet routing.      |
 | `on_message` | no       | list     | empty         | Topic-keyed triggers. The trigger argument `x` is `std::vector<uint8_t>`.   |
+| `messages`   | no       | list     | empty         | Typed protobuf message schemas. Each entry generates a C++ struct named after `id` (PascalCase). Requires `api:` to also be configured (we use its protobuf primitives). |
 
 The component is `MULTI_CONF`-friendly: you can declare two
 `multicast_pubsub:` blocks with different `port:` values to keep separate
@@ -71,6 +78,61 @@ sensor:
 All other keys come from the standard ESPHome
 [`sensor.sensor_schema`](https://esphome.io/components/sensor/) — units,
 filters, device class, `on_value`, MQTT discovery, etc., all work normally.
+
+## Typed-message schemas (`messages:`)
+
+```yaml
+multicast_pubsub:
+  messages:
+    - id: room_climate
+      fields:
+        - { name: temperature, type: float,  tag: 1 }
+        - { name: humidity,    type: float,  tag: 2 }
+        - { name: room_id,     type: string, tag: 3 }
+```
+
+Each entry declares a protobuf-encoded message. Codegen emits a C++
+struct named after `id` (snake_case → PascalCase) into the build,
+along with a `SCHEMA_ID` constant and `encode_to` / `decode_from`
+methods. Two devices that declare an identical schema compute the
+same SCHEMA_ID — a subscriber will drop packets whose SCHEMA_ID
+doesn't match its expected schema.
+
+| Key      | Required | Type   | Notes                                                                     |
+|----------|:--------:|--------|---------------------------------------------------------------------------|
+| `id`     | yes      | str    | Identifier-like (alphanumeric + `_-`, start with letter); becomes the C++ struct name. Must be unique within a `multicast_pubsub:` instance. |
+| `fields` | yes      | list   | At least one field.                                                       |
+
+Per field:
+
+| Key     | Required | Type | Notes                                                                |
+|---------|:--------:|------|----------------------------------------------------------------------|
+| `name`  | yes      | str  | C++ identifier (alphanumeric + `_`, starts with letter).             |
+| `type`  | yes      | enum | `bool`, `int32`, `int64`, `uint32`, `uint64`, `sint32`, `sint64`, `float`, `string`, `bytes`. |
+| `tag`   | yes      | int  | 1..536870911, excluding the reserved range 19000..19999. Must be unique within the message. |
+
+### Type catalog
+
+| YAML type | C++ type | Wire type | Notes |
+|-----------|----------|-----------|-------|
+| `bool`    | `bool`               | varint        | |
+| `int32`   | `int32_t`            | varint        | Negative values encode as 10 bytes — use `sint32` for signed values that may be negative. |
+| `int64`   | `int64_t`            | varint        | Same caveat for negatives. |
+| `uint32`  | `uint32_t`           | varint        | |
+| `uint64`  | `uint64_t`           | varint        | |
+| `sint32`  | `int32_t`            | zigzag varint | Compact encoding for small negative numbers. |
+| `sint64`  | `int64_t`            | zigzag varint | |
+| `float`   | `float`              | fixed32       | Always 4 bytes. |
+| `string`  | `std::string`        | length-delim  | UTF-8. |
+| `bytes`   | `std::vector<uint8_t>` | length-delim | Opaque byte string. |
+
+`double` and `fixed64` are intentionally absent — ESPHome's upstream
+protobuf encoder does not implement wire type 1 (64-bit fixed) to save
+flash on 32-bit microcontrollers. Use `float` or `int64`.
+
+Nested messages are not supported in YAML schemas (deferred). The
+forthcoming `DynamicMessage` C++ API supports nesting for runtime-shaped
+messages.
 
 ## Topic naming rules
 

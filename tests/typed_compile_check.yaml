@@ -1,0 +1,47 @@
+# Step-2 integration test: declares typed messages and confirms that
+# the emitted C++ structs compile under the host platform. No actual
+# publish/subscribe wiring yet (that's step 3); this file just exists
+# to prove the schema codegen produces buildable code against
+# esphome::api::ProtoEncode.
+
+esphome:
+  name: pubsub-typed-compile
+
+host:
+
+logger:
+  level: DEBUG
+
+# The api: component is required when multicast_pubsub.messages: is set
+# (it provides the protobuf encoding primitives we generate code against).
+api:
+
+external_components:
+  - source:
+      type: local
+      path: ../components
+    components: [multicast_pubsub]
+
+multicast_pubsub:
+  scope: link-local
+  messages:
+    - id: room_climate
+      fields:
+        - { name: temperature, type: float,  tag: 1 }
+        - { name: humidity,    type: float,  tag: 2 }
+        - { name: room_id,     type: string, tag: 3 }
+
+    - id: doorbell_event
+      fields:
+        - { name: button_id, type: uint32, tag: 1 }
+        - { name: presses,   type: uint32, tag: 2, }
+
+    - id: kitchen_sink
+      fields:
+        - { name: flag,        type: bool,   tag: 1 }
+        - { name: counter,     type: uint32, tag: 2 }
+        - { name: delta,       type: sint32, tag: 3 }
+        - { name: temperature, type: float,  tag: 4 }
+        - { name: name,        type: string, tag: 5 }
+        - { name: payload,     type: bytes,  tag: 6 }
+        - { name: big,         type: uint64, tag: 7 }
