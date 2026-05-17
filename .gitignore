@@ -19,3 +19,7 @@ esphome/
 *.swp
 .vscode/
 .idea/
+.claude/
+tests/unit/__pycache__/
+tests/unit/topic_hash_test_san
+tests/unit/wire_format_test_san

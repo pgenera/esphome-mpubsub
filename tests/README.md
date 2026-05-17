@@ -18,6 +18,21 @@ pytest -q       # runs all 63 unit tests in ~3s
 | `test_wire_format.py`        | Encode/decode round-trip, validation rules (Python)             |
 | `test_wire_format_cpp.py`    | C++ encode/decode == Python reference, all reject reasons       |
 | `test_config.py`             | YAML schema accepts valid configs, rejects bad scope/port/topic |
+| `test_fuzz.py`               | Fuzz the **C++** decoder/encoder/topic-hash under AddressSanitizer + UndefinedBehaviorSanitizer with random + adversarial inputs (default 5000 per test; tune via `FUZZ_ITERS=`). |
+
+### Fuzzing
+
+`test_fuzz.py` targets the production C++ code, not the Python reference.
+It builds two extra binaries (`wire_format_test_san`, `topic_hash_test_san`)
+with `-fsanitize=address,undefined` and floods them with random bytes,
+mutated valid packets, adversarial size/encoding edge cases, and random
+topic strings. Any sanitizer report (out-of-bounds read, signed-overflow
+UB, alignment violation, abort) fails the test.
+
+To run only the fuzz suite at higher intensity:
+```bash
+FUZZ_ITERS=50000 pytest test_fuzz.py -v
+```
 
 ## Integration tests (host platform)
 

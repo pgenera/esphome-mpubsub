@@ -58,11 +58,22 @@ int main() {
     if (line.empty())
       continue;
     char cmd = line[0];
-    std::string rest = line.substr(2);
+    // Defensive substr -- a one-char line is malformed but must not crash.
+    std::string rest = line.size() >= 2 ? line.substr(2) : std::string();
     if (cmd == 'E') {
       // E <crc> <encoding> <payload>
       size_t s1 = rest.find(' ');
+      if (s1 == std::string::npos) {
+        std::printf("ERR malformed_E\n");
+        std::fflush(stdout);
+        continue;
+      }
       size_t s2 = rest.find(' ', s1 + 1);
+      if (s2 == std::string::npos) {
+        std::printf("ERR malformed_E\n");
+        std::fflush(stdout);
+        continue;
+      }
       uint32_t crc = static_cast<uint32_t>(std::strtoul(rest.substr(0, s1).c_str(), nullptr, 16));
       uint8_t enc_raw = static_cast<uint8_t>(std::strtoul(rest.substr(s1 + 1, s2 - s1 - 1).c_str(), nullptr, 16));
       auto payload = from_hex(rest.substr(s2 + 1));
