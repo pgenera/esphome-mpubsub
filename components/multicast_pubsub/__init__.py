@@ -42,6 +42,7 @@ CONF_ON_MESSAGE = "on_message"
 CONF_MESSAGES = "messages"
 CONF_FIELDS = "fields"
 CONF_TAG = "tag"
+CONF_MESSAGE = "message"
 
 SCOPES = {
     "link-local": Scope.LINK_LOCAL,
@@ -190,6 +191,26 @@ def _topic_validator(value):
     return value
 
 
+def _on_message_validator(config):
+    """Top-level wire-up: each on_message: entry may opt into a typed
+    schema by setting ``message: <schema_id>``. The trigger class used at
+    codegen time is then the generated ``On<Pascal>Trigger`` rather than
+    the raw byte-vector ``OnMessageTrigger``.
+
+    The actual codegen happens in ``to_code`` once we know which message
+    schemas exist; the schema id reference is resolved there.
+    """
+    # Wrap the underlying automation validator without re-declaring its
+    # trigger id (the dynamic-class case rewrites the id type below).
+    return automation.validate_automation(
+        {
+            cv.GenerateID(CONF_TRIGGER_ID): cv.declare_id(OnMessageTrigger),
+            cv.Required(CONF_TOPIC): _topic_validator,
+            cv.Optional(CONF_MESSAGE): _message_id_validator,
+        }
+    )(config)
+
+
 CONFIG_SCHEMA = cv.Schema(
     {
         cv.GenerateID(): cv.declare_id(MulticastPubSub),
@@ -197,44 +218,57 @@ CONFIG_SCHEMA = cv.Schema(
         cv.Optional(CONF_SCOPE, default="link-local"): cv.enum(SCOPES, lower=True),
         cv.Optional(CONF_HOPS, default=1): cv.int_range(min=1, max=255),
         cv.Optional(CONF_MESSAGES, default=list): _messages_validator,
-        cv.Optional(CONF_ON_MESSAGE): automation.validate_automation(
-            {
-                cv.GenerateID(CONF_TRIGGER_ID): cv.declare_id(OnMessageTrigger),
-                cv.Required(CONF_TOPIC): _topic_validator,
-            },
-        ),
+        cv.Optional(CONF_ON_MESSAGE): _on_message_validator,
     }
 ).extend(cv.COMPONENT_SCHEMA)
 
 
-def _require_api_when_using_messages(config):
-    """Final-validate hook: if the user declared typed messages, the api:
-    component must also be configured (we depend on its protobuf
-    primitives in components/api/proto.h)."""
-    if not config.get(CONF_MESSAGES):
-        return config
-    full = fv.full_config.get()
-    if "api" not in full:
-        raise cv.Invalid(
-            "multicast_pubsub `messages:` requires the `api:` component to be "
-            "configured (used for protobuf encoding primitives). Add an "
-            "`api:` section to your YAML, or remove the `messages:` block to "
-            "stick to raw payloads.",
-            path=[CONF_MESSAGES],
-        )
+def _final_validate(config):
+    """Two checks that can only run after all schemas have evaluated:
+
+    1. If `messages:` is declared, `api:` must be present (we depend on
+       its protobuf primitives in components/api/proto.h).
+    2. If any `on_message: + message:` references a schema id, that
+       schema must actually be declared in `messages:`.
+    """
+    if config.get(CONF_MESSAGES):
+        full = fv.full_config.get()
+        if "api" not in full:
+            raise cv.Invalid(
+                "multicast_pubsub `messages:` requires the `api:` component to "
+                "be configured (used for protobuf encoding primitives). Add an "
+                "`api:` section to your YAML, or remove the `messages:` block "
+                "to stick to raw payloads.",
+                path=[CONF_MESSAGES],
+            )
+
+    declared = {m[CONF_ID] for m in config.get(CONF_MESSAGES, [])}
+    for i, trig in enumerate(config.get(CONF_ON_MESSAGE, [])):
+        ref = trig.get(CONF_MESSAGE)
+        if ref is None:
+            continue
+        if ref not in declared:
+            raise cv.Invalid(
+                f"on_message references unknown message {ref!r}; declare it "
+                f"under `messages:`. Known: {sorted(declared) or '(none)'}",
+                path=[CONF_ON_MESSAGE, i, CONF_MESSAGE],
+            )
     return config
 
 
-FINAL_VALIDATE_SCHEMA = _require_api_when_using_messages
+FINAL_VALIDATE_SCHEMA = _final_validate
 
 
 async def to_code(config):
     # Typed messages reference esphome::api::ProtoEncode / ProtoDecodableMessage,
     # so pull in proto.h from the api component (presence enforced by
-    # FINAL_VALIDATE_SCHEMA above).
+    # FINAL_VALIDATE_SCHEMA above). cg.add_global appends a ';' to whatever
+    # we emit, which a preprocessor directive doesn't want; the safest trick
+    # is to wrap it in a dummy statement that swallows the trailing token.
     if config.get(CONF_MESSAGES):
         cg.add_global(cg.RawExpression(
-            '#include "esphome/components/api/proto.h"'
+            '#include "esphome/components/api/proto.h"\n'
+            'struct multicast_pubsub_force_proto_include_'
         ))
     for msg_cfg in config.get(CONF_MESSAGES, []):
         msg = proto_emitter.Message(
@@ -253,10 +287,29 @@ async def to_code(config):
     cg.add(var.set_hops(config[CONF_HOPS]))
 
     for conf in config.get(CONF_ON_MESSAGE, []):
-        trigger = cg.new_Pvariable(conf[CONF_TRIGGER_ID], var, conf[CONF_TOPIC])
-        await automation.build_automation(
-            trigger, [(cg.std_vector.template(cg.uint8), "x")], conf
-        )
+        if CONF_MESSAGE in conf:
+            # Typed receive: instantiate the generated On<Pascal>Trigger
+            # class that subscribes via subscribe_typed<T> and emits the
+            # decoded struct as the trigger argument.
+            class_name = proto_emitter.pascal_case(conf[CONF_MESSAGE])
+            trigger_cls = multicast_pubsub_ns.class_(
+                f"On{class_name}Trigger", automation.Trigger
+            )
+            msg_struct = multicast_pubsub_ns.namespace("messages").class_(class_name)
+            # Re-declare the trigger id with the typed class so cg.new_Pvariable
+            # produces the right C++ type.
+            trigger_id = conf[CONF_TRIGGER_ID]
+            trigger_id.type = trigger_cls
+            trigger = cg.new_Pvariable(trigger_id, var, conf[CONF_TOPIC])
+            # Trigger<T> hands the user lambda `T x` by value, matching the
+            # `Trigger<MsgStruct>` base of the generated trigger class.
+            await automation.build_automation(trigger, [(msg_struct, "x")], conf)
+        else:
+            # Raw receive: bytes vector argument, original behavior.
+            trigger = cg.new_Pvariable(conf[CONF_TRIGGER_ID], var, conf[CONF_TOPIC])
+            await automation.build_automation(
+                trigger, [(cg.std_vector.template(cg.uint8), "x")], conf
+            )
 
 
 PUBLISH_ACTION_SCHEMA = cv.Schema(

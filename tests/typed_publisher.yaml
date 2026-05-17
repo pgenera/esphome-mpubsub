@@ -1,0 +1,56 @@
+# Step-3 integration test: publishes a typed RoomClimate message every
+# second. The companion typed_subscriber.yaml receives it and logs the
+# typed fields.
+#
+# Typed publish currently goes through a small lambda action -- the
+# generated `On<Msg>Trigger` covers the receive side; the YAML sugar
+# for a typed publish: action (message: + values:) is a planned
+# follow-up. The publish<T> C++ template makes the lambda short.
+
+esphome:
+  name: pubsub-typed-publisher
+
+host:
+
+logger:
+  level: DEBUG
+
+api:
+
+external_components:
+  - source:
+      type: local
+      path: ../components
+    components: [multicast_pubsub]
+
+multicast_pubsub:
+  id: pubsub
+  scope: link-local
+  messages:
+    - id: room_climate
+      fields:
+        - { name: temperature, type: float,  tag: 1 }
+        - { name: humidity,    type: float,  tag: 2 }
+        - { name: room_id,     type: string, tag: 3 }
+
+sensor:
+  - platform: template
+    id: source_temp
+    name: "Source Temperature"
+    lambda: 'return 20.0f + (millis() / 1000) % 10;'
+    update_interval: 1s
+  - platform: template
+    id: source_hum
+    name: "Source Humidity"
+    lambda: 'return 40.0f + (millis() / 1000) % 20;'
+    update_interval: 1s
+
+interval:
+  - interval: 1s
+    then:
+      - lambda: |-
+          esphome::multicast_pubsub::messages::RoomClimate m;
+          m.temperature = id(source_temp).state;
+          m.humidity = id(source_hum).state;
+          m.room_id = "test-room";
+          id(pubsub)->publish(std::string("test/climate"), m);

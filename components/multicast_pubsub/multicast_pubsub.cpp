@@ -78,7 +78,7 @@ void MulticastPubSub::loop() {
       ESP_LOGV(TAG, "drop packet: decode err %u", static_cast<unsigned>(err));
       continue;
     }
-    this->deliver_(pkt.topic_crc, pkt.payload);
+    this->deliver_(pkt.topic_crc, pkt.encoding, pkt.payload);
   }
 }
 
@@ -105,7 +105,8 @@ void MulticastPubSub::dump_config() {
   for (const auto &sub : this->subscriptions_) {
     char addr_buf[64];
     group_to_string(sub.group, addr_buf, sizeof(addr_buf));
-    ESP_LOGCONFIG(TAG, "    '%s' -> [%s]:%u (crc=%08x)", sub.topic.c_str(), addr_buf, this->port_, sub.crc);
+    ESP_LOGCONFIG(TAG, "    '%s' -> [%s]:%u (crc=%08x, raw=%zu typed=%zu)", sub.topic.c_str(), addr_buf, this->port_,
+                  sub.crc, sub.raw_callbacks.size(), sub.typed_callbacks.size());
   }
 }
 
@@ -117,20 +118,16 @@ Subscription *MulticastPubSub::find_subscription_(const std::string &topic) {
   return nullptr;
 }
 
-void MulticastPubSub::subscribe(const std::string &topic, MessageCallback cb) {
-  Subscription *existing = this->find_subscription_(topic);
-  if (existing) {
-    existing->callbacks.push_back(std::move(cb));
-    return;
-  }
+Subscription *MulticastPubSub::find_or_create_subscription_(const std::string &topic) {
+  if (Subscription *existing = this->find_subscription_(topic))
+    return existing;
   Subscription sub;
   sub.topic = topic;
   sub.crc = topic_crc32(topic);
   sub.group = topic_to_group(topic, this->scope_);
-  sub.callbacks.push_back(std::move(cb));
   this->subscriptions_.push_back(std::move(sub));
-  // Group join happens in setup(); if subscribe() is called after setup()
-  // (e.g. dynamic subscription), join now.
+  // Group join happens in setup() for subscriptions registered before then;
+  // for late subscriptions, join immediately so we start receiving.
   if (this->socket_) {
     auto &just_added = this->subscriptions_.back();
     struct ipv6_mreq mreq {};
@@ -140,6 +137,12 @@ void MulticastPubSub::subscribe(const std::string &topic, MessageCallback cb) {
       ESP_LOGW(TAG, "Late IPV6_JOIN_GROUP failed for topic '%s': errno %d", just_added.topic.c_str(), errno);
     }
   }
+  return &this->subscriptions_.back();
+}
+
+void MulticastPubSub::subscribe(const std::string &topic, MessageCallback cb) {
+  Subscription *sub = this->find_or_create_subscription_(topic);
+  sub->raw_callbacks.push_back(std::move(cb));
 }
 
 bool MulticastPubSub::publish(const std::string &topic, std::span<const uint8_t> payload, Encoding encoding) {
@@ -175,15 +178,33 @@ bool MulticastPubSub::publish(const std::string &topic, std::span<const uint8_t>
   return true;
 }
 
-void MulticastPubSub::deliver_(uint32_t crc, std::span<const uint8_t> payload) {
+void MulticastPubSub::deliver_(uint32_t crc, Encoding encoding, std::span<const uint8_t> payload) {
   for (auto &sub : this->subscriptions_) {
     if (sub.crc != crc)
       continue;
-    // CRC match -- almost certainly the right topic. (False positives across
-    // 32 bits of CRC are vanishingly rare on the small per-device topic set;
-    // worst case the subscriber sees a bogus payload.)
-    for (auto &cb : sub.callbacks)
-      cb(payload);
+    if (encoding == Encoding::RAW) {
+      for (auto &cb : sub.raw_callbacks)
+        cb(payload);
+    } else if (encoding == Encoding::PROTOBUF) {
+      if (payload.size() < 2) {
+        ESP_LOGV(TAG, "drop PROTOBUF packet: body too short for SCHEMA_ID (%zu)", payload.size());
+        continue;
+      }
+      uint16_t schema_id = static_cast<uint16_t>(payload[0]) | (static_cast<uint16_t>(payload[1]) << 8);
+      auto body = payload.subspan(2);
+      bool matched_any = false;
+      for (auto &tc : sub.typed_callbacks) {
+        if (tc.schema_id == schema_id) {
+          tc.callback(body);
+          matched_any = true;
+        }
+      }
+      if (!matched_any) {
+        // Helps diagnose stale-deploy issues where publisher and subscriber
+        // have drifted on schema definitions.
+        ESP_LOGV(TAG, "no typed callback for topic '%s' schema_id=%04x", sub.topic.c_str(), schema_id);
+      }
+    }
   }
 }
 

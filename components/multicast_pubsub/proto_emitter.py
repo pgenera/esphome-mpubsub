@@ -220,12 +220,14 @@ def _emit_decode_overrides(msg: Message) -> str:
 
 
 def emit_struct(msg: Message) -> str:
-    """Return the full C++ struct definition for a message.
+    """Return the full C++ struct definition for a message, plus the
+    matching ``On<Msg>Trigger`` class.
 
     The emitted code is dropped into ``main.cpp`` at file scope via
     ``cg.add_global(cg.RawExpression(...))`` from the component's
     ``to_code``. It depends on ``esphome/components/api/proto.h`` for the
-    encoder/decoder primitives.
+    encoder/decoder primitives and on ``multicast_pubsub.h`` for the
+    typed subscribe API.
     """
     validate(msg)
     members = "\n".join(_emit_member(f) for f in msg.fields)
@@ -233,7 +235,7 @@ def emit_struct(msg: Message) -> str:
     decode_overrides = _emit_decode_overrides(msg)
     canonical = canonical_schema_string(msg).replace("\\", "\\\\").replace("\n", "\\n")
     sid = schema_id(msg)
-    struct_name = _to_pascal_case(msg.id)
+    struct_name = pascal_case(msg.id)
     return f"""
 // ----- Generated from YAML messages: entry '{msg.id}' (do not edit) -----
 // Canonical schema: "{canonical}"
@@ -257,9 +259,29 @@ struct {struct_name} : public esphome::api::ProtoDecodableMessage {{
 {decode_overrides}}};
 
 }}  // namespace esphome::multicast_pubsub::messages
+
+namespace esphome::multicast_pubsub {{
+
+// Typed trigger class for `on_message: + message: {msg.id}`. The argument
+// passed into the user lambda is the fully-decoded struct, not raw bytes.
+class On{struct_name}Trigger : public esphome::Trigger<esphome::multicast_pubsub::messages::{struct_name}> {{
+ public:
+  On{struct_name}Trigger(MulticastPubSub *parent, const std::string &topic) {{
+    parent->subscribe_typed<esphome::multicast_pubsub::messages::{struct_name}>(
+        topic, [this](const esphome::multicast_pubsub::messages::{struct_name} &m) {{
+          this->trigger(m);
+        }});
+  }}
+}};
+
+}}  // namespace esphome::multicast_pubsub
 """
 
 
-def _to_pascal_case(name: str) -> str:
+def pascal_case(name: str) -> str:
     """Convert a snake_case or kebab-case id to PascalCase for the C++ type."""
     return "".join(part[:1].upper() + part[1:] for part in name.replace("-", "_").split("_") if part)
+
+
+# Backwards-compatible alias used in some tests.
+_to_pascal_case = pascal_case

@@ -1,0 +1,37 @@
+# Step-3 integration test: subscribes to a typed RoomClimate message
+# via on_message + message: and logs the typed fields. Pairs with
+# typed_publisher.yaml.
+
+esphome:
+  name: pubsub-typed-subscriber
+
+host:
+
+logger:
+  level: VERBOSE
+
+api:
+
+external_components:
+  - source:
+      type: local
+      path: ../components
+    components: [multicast_pubsub]
+
+multicast_pubsub:
+  id: pubsub
+  scope: link-local
+  messages:
+    - id: room_climate
+      fields:
+        - { name: temperature, type: float,  tag: 1 }
+        - { name: humidity,    type: float,  tag: 2 }
+        - { name: room_id,     type: string, tag: 3 }
+  on_message:
+    # Typed receive: x is a decoded RoomClimate struct
+    - topic: "test/climate"
+      message: room_climate
+      then:
+        - logger.log:
+            format: "typed receive: temperature=%.2f humidity=%.2f room='%s'"
+            args: ['x.temperature', 'x.humidity', 'x.room_id.c_str()']
