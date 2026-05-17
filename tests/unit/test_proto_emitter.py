@@ -179,6 +179,55 @@ def test_decode_methods_omitted_for_unused_wire_types() -> None:
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# Fluent Call builder (mirrors esphome::light::LightCall)
+# ---------------------------------------------------------------------------
+
+
+def test_emits_nested_call_class() -> None:
+    src = _struct(("v", "int32", 1), id_="room_climate")
+    # Nested forward declaration inside the struct...
+    assert "class Call;" in src
+    # ...and the out-of-class definition (qualified name) below it.
+    assert "class RoomClimate::Call {" in src
+    assert "Call(esphome::multicast_pubsub::MulticastPubSub *parent, std::string topic)" in src
+    assert "bool perform();" in src
+    assert "RoomClimate &message()" in src
+    assert "const RoomClimate &message() const" in src
+    assert "Call &set_topic(std::string topic)" in src
+
+
+def test_call_setters_are_fluent_for_scalars() -> None:
+    src = _struct(("temperature", "float", 1))
+    # By-value setter returns Call&
+    assert "Call &set_temperature(float value)" in src
+    assert "this->msg_.temperature = value; return *this;" in src
+    # optional<T> overload
+    assert "Call &set_temperature(esphome::optional<float> value)" in src
+    assert "if (value.has_value()) this->msg_.temperature = *value;" in src
+
+
+def test_call_setters_for_string_include_const_char_overload() -> None:
+    src = _struct(("name", "string", 1))
+    assert "Call &set_name(const std::string & value)" in src
+    assert "Call &set_name(const char *value)" in src
+    assert "Call &set_name(esphome::optional<std::string> value)" in src
+
+
+def test_call_setters_for_bytes_have_three_overloads() -> None:
+    src = _struct(("blob", "bytes", 1))
+    assert "Call &set_blob(std::vector<uint8_t> value)" in src
+    assert "Call &set_blob(const uint8_t *data, size_t len)" in src
+    assert "Call &set_blob(std::span<const uint8_t> data)" in src
+
+
+def test_call_perform_publishes_via_parent_template() -> None:
+    src = _struct(("v", "int32", 1), id_="room_climate")
+    # Out-of-line perform definition uses publish<T>(topic, msg)
+    assert "::Call::perform()" in src
+    assert "this->parent_->publish(this->topic_, this->msg_)" in src
+
+
 def test_kitchen_sink_message() -> None:
     src = _struct(
         ("flag", "bool", 1),

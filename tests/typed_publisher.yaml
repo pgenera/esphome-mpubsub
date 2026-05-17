@@ -48,9 +48,13 @@ sensor:
 interval:
   - interval: 1s
     then:
+      # Fluent typed publish via the LightCall-style builder. The
+      # generated `RoomClimate::Call` class chains set_<field>() calls
+      # and finishes with perform(), which encodes and publishes.
       - lambda: |-
-          esphome::multicast_pubsub::messages::RoomClimate m;
-          m.temperature = id(source_temp).state;
-          m.humidity = id(source_hum).state;
-          m.room_id = "test-room";
-          id(pubsub)->publish(std::string("test/climate"), m);
+          using esphome::multicast_pubsub::messages::RoomClimate;
+          id(pubsub)->make_call<RoomClimate>("test/climate")
+              .set_temperature(id(source_temp).state)
+              .set_humidity(id(source_hum).state)
+              .set_room_id("test-room")
+              .perform();

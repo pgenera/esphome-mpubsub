@@ -96,6 +96,22 @@ class MulticastPubSub : public Component {
                          Encoding::PROTOBUF);
   }
 
+  /// Construct a fluent builder for a typed message. Mirrors
+  /// esphome::light::LightState::make_call() -- chain set_<field>() calls
+  /// and finish with perform() to encode and publish.
+  ///
+  /// Example:
+  ///   id(pubsub)->make_call<RoomClimate>("home/garage/climate")
+  ///       .set_temperature(22.5f)
+  ///       .set_room_id("garage")
+  ///       .perform();
+  ///
+  /// `T` must be a generated message struct (one of the entries under
+  /// `multicast_pubsub.messages:` in YAML).
+  template<typename T> typename T::Call make_call(const std::string &topic) {
+    return typename T::Call(this, topic);
+  }
+
  protected:
   void deliver_(uint32_t crc, Encoding encoding, std::span<const uint8_t> payload);
   Subscription *find_subscription_(const std::string &topic);

@@ -23,25 +23,40 @@ import zlib
 from dataclasses import dataclass
 
 
-# Type catalog. The order of (cpp_type, wire_type, encode_method) is:
-#   cpp_type      -- the C++ type for the struct member
-#   wire_type     -- the protobuf wire-type (0=varint, 2=length-delim, 5=fixed32)
-#   encode_method -- the ProtoEncode::encode_* method name
-#   decode_action -- which decode_*() override the field hooks into
+# Type catalog. Each entry carries:
+#   cpp        -- the C++ type for the struct member
+#   wire       -- protobuf wire-type (0=varint, 2=length-delim, 5=fixed32)
+#   encoder    -- the ProtoEncode::encode_* method name
+#   default    -- C++ initializer for the struct member
+#   setter_arg -- the C++ type used in the by-value setter on Call
+#                 (e.g. `const std::string &` so callers can pass literals,
+#                 `std::vector<uint8_t>` for bytes since the Call takes ownership)
+#   call_category -- "scalar" | "string" | "bytes" -- decides which setter
+#                 overloads the Call emits.
 #
 # Wire type 1 (64-bit fixed: double / fixed64 / sfixed64) is intentionally
 # unsupported -- matches ESPHome's own protobuf encoder; see proto.h.
 TYPE_INFO = {
-    "bool":   {"cpp": "bool",        "wire": 0, "encoder": "encode_bool",   "default": "false"},
-    "int32":  {"cpp": "int32_t",     "wire": 0, "encoder": "encode_int32",  "default": "0"},
-    "int64":  {"cpp": "int64_t",     "wire": 0, "encoder": "encode_int64",  "default": "0"},
-    "uint32": {"cpp": "uint32_t",    "wire": 0, "encoder": "encode_uint32", "default": "0"},
-    "uint64": {"cpp": "uint64_t",    "wire": 0, "encoder": "encode_uint64", "default": "0"},
-    "sint32": {"cpp": "int32_t",     "wire": 0, "encoder": "encode_sint32", "default": "0"},
-    "sint64": {"cpp": "int64_t",     "wire": 0, "encoder": "encode_sint64", "default": "0"},
-    "float":  {"cpp": "float",       "wire": 5, "encoder": "encode_float",  "default": "0.0f"},
-    "string": {"cpp": "std::string", "wire": 2, "encoder": "encode_string", "default": '""'},
-    "bytes":  {"cpp": "std::vector<uint8_t>", "wire": 2, "encoder": "encode_bytes", "default": "{}"},
+    "bool":   {"cpp": "bool",        "wire": 0, "encoder": "encode_bool",   "default": "false",
+               "setter_arg": "bool",     "call_category": "scalar"},
+    "int32":  {"cpp": "int32_t",     "wire": 0, "encoder": "encode_int32",  "default": "0",
+               "setter_arg": "int32_t",  "call_category": "scalar"},
+    "int64":  {"cpp": "int64_t",     "wire": 0, "encoder": "encode_int64",  "default": "0",
+               "setter_arg": "int64_t",  "call_category": "scalar"},
+    "uint32": {"cpp": "uint32_t",    "wire": 0, "encoder": "encode_uint32", "default": "0",
+               "setter_arg": "uint32_t", "call_category": "scalar"},
+    "uint64": {"cpp": "uint64_t",    "wire": 0, "encoder": "encode_uint64", "default": "0",
+               "setter_arg": "uint64_t", "call_category": "scalar"},
+    "sint32": {"cpp": "int32_t",     "wire": 0, "encoder": "encode_sint32", "default": "0",
+               "setter_arg": "int32_t",  "call_category": "scalar"},
+    "sint64": {"cpp": "int64_t",     "wire": 0, "encoder": "encode_sint64", "default": "0",
+               "setter_arg": "int64_t",  "call_category": "scalar"},
+    "float":  {"cpp": "float",       "wire": 5, "encoder": "encode_float",  "default": "0.0f",
+               "setter_arg": "float",    "call_category": "scalar"},
+    "string": {"cpp": "std::string", "wire": 2, "encoder": "encode_string", "default": '""',
+               "setter_arg": "const std::string &", "call_category": "string"},
+    "bytes":  {"cpp": "std::vector<uint8_t>", "wire": 2, "encoder": "encode_bytes", "default": "{}",
+               "setter_arg": "std::vector<uint8_t>", "call_category": "bytes"},
 }
 
 VALID_TYPES = frozenset(TYPE_INFO.keys())
@@ -219,6 +234,61 @@ def _emit_decode_overrides(msg: Message) -> str:
     return "\n".join(p for p in parts if p)
 
 
+def _emit_call_setters(msg: Message, struct_name: str) -> str:
+    """Emit the fluent set_<field>() setter chain for the Call class.
+
+    Mirrors esphome::light::LightCall's API shape: every setter takes the
+    value by appropriate const ref / value, also has an optional<T>
+    overload for callers that want conditional sets, and returns *this so
+    multiple sets can be chained. perform() is what actually publishes.
+    """
+    lines: list[str] = []
+    for f in msg.fields:
+        info = TYPE_INFO[f.type]
+        arg = info["setter_arg"]
+        category = info["call_category"]
+        n = f.name
+        if category == "scalar":
+            opt = f"esphome::optional<{info['cpp']}>"
+            lines.append(
+                f"    Call &set_{n}({arg} value) {{ this->msg_.{n} = value; return *this; }}"
+            )
+            lines.append(
+                f"    Call &set_{n}({opt} value) {{ "
+                f"if (value.has_value()) this->msg_.{n} = *value; return *this; }}"
+            )
+        elif category == "string":
+            opt = "esphome::optional<std::string>"
+            # const char * overload so callers can pass a string literal without
+            # constructing a std::string at the call site.
+            lines.append(
+                f"    Call &set_{n}({arg} value) {{ this->msg_.{n} = value; return *this; }}"
+            )
+            lines.append(
+                f"    Call &set_{n}(const char *value) {{ this->msg_.{n} = value; return *this; }}"
+            )
+            lines.append(
+                f"    Call &set_{n}({opt} value) {{ "
+                f"if (value.has_value()) this->msg_.{n} = *value; return *this; }}"
+            )
+        elif category == "bytes":
+            # bytes accepts a vector (by move), a (ptr,len) pair, or a span.
+            lines.append(
+                f"    Call &set_{n}({arg} value) {{ this->msg_.{n} = std::move(value); return *this; }}"
+            )
+            lines.append(
+                f"    Call &set_{n}(const uint8_t *data, size_t len) {{ "
+                f"this->msg_.{n}.assign(data, data + len); return *this; }}"
+            )
+            lines.append(
+                f"    Call &set_{n}(std::span<const uint8_t> data) {{ "
+                f"this->msg_.{n}.assign(data.begin(), data.end()); return *this; }}"
+            )
+        else:
+            raise AssertionError(f"unknown call_category {category!r}")
+    return "\n".join(lines)
+
+
 def emit_struct(msg: Message) -> str:
     """Return the full C++ struct definition for a message, plus the
     matching ``On<Msg>Trigger`` class.
@@ -227,12 +297,14 @@ def emit_struct(msg: Message) -> str:
     ``cg.add_global(cg.RawExpression(...))`` from the component's
     ``to_code``. It depends on ``esphome/components/api/proto.h`` for the
     encoder/decoder primitives and on ``multicast_pubsub.h`` for the
-    typed subscribe API.
+    typed subscribe API and the ``MulticastPubSub`` parent type used by
+    the nested ``Call`` builder.
     """
     validate(msg)
     members = "\n".join(_emit_member(f) for f in msg.fields)
     encode_calls = "\n".join(_emit_encode_call(f) for f in msg.fields)
     decode_overrides = _emit_decode_overrides(msg)
+    call_setters = _emit_call_setters(msg, pascal_case(msg.id))
     canonical = canonical_schema_string(msg).replace("\\", "\\\\").replace("\n", "\\n")
     sid = schema_id(msg)
     struct_name = pascal_case(msg.id)
@@ -256,7 +328,53 @@ struct {struct_name} : public esphome::api::ProtoDecodableMessage {{
     return static_cast<size_t>(pos - out);
   }}
 
-{decode_overrides}}};
+{decode_overrides}
+
+  // Forward declaration for the fluent builder; defined out-of-class
+  // below so its `{struct_name} msg_` member can be a value member
+  // (incomplete-type rule forbids that inside the enclosing class body).
+  class Call;
+}};
+
+// Fluent builder, modeled after esphome::light::LightCall. Bind a
+// parent + topic at construction, chain set_<field>() calls (each
+// returns *this), then perform() to encode and publish.
+//
+// Example:
+//   {struct_name}::Call(id(pubsub), "home/garage/climate")
+//       .set_temperature(22.5f)
+//       .set_room_id("garage")
+//       .perform();
+//
+// Equivalent via the templated factory on MulticastPubSub:
+//   id(pubsub)->make_call<{struct_name}>("home/garage/climate")
+//       .set_temperature(22.5f).set_room_id("garage").perform();
+class {struct_name}::Call {{
+ public:
+  Call(esphome::multicast_pubsub::MulticastPubSub *parent, std::string topic)
+      : parent_(parent), topic_(std::move(topic)) {{}}
+
+{call_setters}
+
+  /// Direct access to the underlying message -- escape hatch for
+  /// repeated-field push_back, conditional assembly, or anything the
+  /// fluent setters don't cover.
+  {struct_name} &message() {{ return this->msg_; }}
+  const {struct_name} &message() const {{ return this->msg_; }}
+
+  /// Set/replace the destination topic.
+  Call &set_topic(std::string topic) {{ this->topic_ = std::move(topic); return *this; }}
+  const std::string &topic() const {{ return this->topic_; }}
+
+  /// Encode and publish. Returns false on socket error or oversize payload
+  /// (see MulticastPubSub::publish for diagnostics).
+  bool perform();
+
+ protected:
+  esphome::multicast_pubsub::MulticastPubSub *parent_;
+  std::string topic_;
+  {struct_name} msg_;
+}};
 
 }}  // namespace esphome::multicast_pubsub::messages
 
@@ -275,6 +393,12 @@ class On{struct_name}Trigger : public esphome::Trigger<esphome::multicast_pubsub
 }};
 
 }}  // namespace esphome::multicast_pubsub
+
+// perform() is defined here so it can call MulticastPubSub::publish<T>
+// (whose definition lives in multicast_pubsub.h and is included before this).
+inline bool esphome::multicast_pubsub::messages::{struct_name}::Call::perform() {{
+  return this->parent_->publish(this->topic_, this->msg_);
+}}
 """
 
 
