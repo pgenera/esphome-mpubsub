@@ -142,7 +142,7 @@ void MulticastPubSub::subscribe(const std::string &topic, MessageCallback cb) {
   }
 }
 
-bool MulticastPubSub::publish(const std::string &topic, std::span<const uint8_t> payload, uint8_t flags) {
+bool MulticastPubSub::publish(const std::string &topic, std::span<const uint8_t> payload, Encoding encoding) {
   if (!this->socket_) {
     ESP_LOGW(TAG, "publish(%s): socket not ready", topic.c_str());
     return false;
@@ -153,15 +153,11 @@ bool MulticastPubSub::publish(const std::string &topic, std::span<const uint8_t>
     this->status_set_warning(LOG_STR("oversize publish payload"));
     return false;
   }
-  if (flags & RESERVED_FLAG_MASK) {
-    ESP_LOGW(TAG, "publish(%s): reserved flag bits set (%02x)", topic.c_str(), flags);
-    return false;
-  }
   uint32_t crc = topic_crc32(topic);
   GroupAddr group = topic_to_group(topic, this->scope_);
 
   std::array<uint8_t, MAX_DATAGRAM> buf;
-  encode_header(crc, flags, static_cast<uint16_t>(payload.size()), buf.data());
+  encode_header(crc, encoding, static_cast<uint16_t>(payload.size()), buf.data());
   std::memcpy(buf.data() + HEADER_LEN, payload.data(), payload.size());
 
   struct sockaddr_in6 dest {};

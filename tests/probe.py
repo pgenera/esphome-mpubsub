@@ -21,6 +21,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent / "unit"))
 from reference import (  # noqa: E402
     DEFAULT_PORT,
+    ENCODING_PROTOBUF,
+    ENCODING_RAW,
     SCOPE_LINK_LOCAL,
     SCOPE_ORG_LOCAL,
     SCOPE_SITE_LOCAL,
@@ -29,6 +31,9 @@ from reference import (  # noqa: E402
     encode,
     topic_to_group,
 )
+
+
+_ENCODING_NAMES = {ENCODING_RAW: "RAW", ENCODING_PROTOBUF: "PROTOBUF"}
 
 
 SCOPES = {
@@ -66,7 +71,7 @@ def main() -> int:
 
     if args.publish is not None:
         payload = args.publish.encode("utf-8")
-        pkt = encode(args.topic, payload, flags=0x01)  # FLAG_TEXT
+        pkt = encode(args.topic, payload, encoding=ENCODING_RAW)
         sock = socket.socket(socket.AF_INET6, socket.SOCK_DGRAM)
         if args.iface is not None:
             idx = socket.if_nametoindex(args.iface) if not args.iface.isdigit() else int(args.iface)
@@ -95,19 +100,20 @@ def main() -> int:
         except socket.timeout:
             return 0
         try:
-            crc, flags, payload = decode(data)
+            crc, encoding, payload = decode(data)
         except WireError as e:
             print(f"[bad packet from {peer}]: {e}")
             continue
-        text = ""
-        if flags & 0x01:
+        enc_name = _ENCODING_NAMES.get(encoding, f"0x{encoding:02x}")
+        decoded = ""
+        if encoding == ENCODING_RAW:
             try:
-                text = f" {payload.decode('utf-8')!r}"
+                decoded = f" {payload.decode('utf-8')!r}"
             except UnicodeDecodeError:
-                text = ""
+                pass
         print(
             f"+{time.monotonic() - start:.3f}s from {peer}: "
-            f"crc={crc:08x} flags={flags:02x} payload({len(payload)} B)={payload.hex()}{text}"
+            f"crc={crc:08x} enc={enc_name} payload({len(payload)} B)={payload.hex()}{decoded}"
         )
 
 

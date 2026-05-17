@@ -43,13 +43,14 @@ class MulticastPubSub : public Component {
   // supported; the first subscription to a topic joins the multicast group.
   void subscribe(const std::string &topic, MessageCallback cb);
 
-  // Publish `payload` to `topic`. `flags` may set FLAG_TEXT / FLAG_RETAIN_HINT.
-  // Returns false and logs a warning on socket error.
-  bool publish(const std::string &topic, std::span<const uint8_t> payload, uint8_t flags = 0);
-  bool publish(const std::string &topic, const std::string &payload, uint8_t flags = 0) {
-    return this->publish(topic, std::span<const uint8_t>(reinterpret_cast<const uint8_t *>(payload.data()),
-                                                         payload.size()),
-                         flags);
+  // Publish `payload` to `topic`. Defaults to ENCODING=RAW (opaque bytes);
+  // typed publishes set Encoding::PROTOBUF and prepend a SCHEMA_ID.
+  // Returns false and logs a warning on socket error or oversize payload.
+  bool publish(const std::string &topic, std::span<const uint8_t> payload, Encoding encoding = Encoding::RAW);
+  bool publish(const std::string &topic, const std::string &payload, Encoding encoding = Encoding::RAW) {
+    return this->publish(topic,
+                         std::span<const uint8_t>(reinterpret_cast<const uint8_t *>(payload.data()), payload.size()),
+                         encoding);
   }
 
  protected:

@@ -5,12 +5,11 @@ from __future__ import annotations
 import pytest
 
 from reference import (
-    FLAG_RETAIN_HINT,
-    FLAG_TEXT,
+    ENCODING_PROTOBUF,
+    ENCODING_RAW,
     HEADER_LEN,
     MAGIC,
     MAX_PAYLOAD,
-    RESERVED_FLAG_MASK,
     VERSION,
     WireError,
     decode,
@@ -28,8 +27,7 @@ def test_header_layout() -> None:
     pkt = encode("hello", b"world")
     assert pkt[0:2] == MAGIC
     assert pkt[2] == VERSION
-    assert pkt[3] == 0  # no flags
-    # CRC is little-endian
+    assert pkt[3] == ENCODING_RAW
     crc = int.from_bytes(pkt[4:8], "little")
     assert crc == topic_crc32("hello")
     payload_len = int.from_bytes(pkt[8:10], "little")
@@ -38,12 +36,23 @@ def test_header_layout() -> None:
     assert pkt[12:] == b"world"
 
 
-def test_roundtrip() -> None:
+def test_roundtrip_raw() -> None:
     payload = b"\x01\x02\x03\xff\xfe"
-    pkt = encode("topic/x", payload, flags=FLAG_TEXT)
-    crc, flags, body = decode(pkt)
+    pkt = encode("topic/x", payload, encoding=ENCODING_RAW)
+    crc, encoding, body = decode(pkt)
     assert crc == topic_crc32("topic/x")
-    assert flags == FLAG_TEXT
+    assert encoding == ENCODING_RAW
+    assert body == payload
+
+
+def test_roundtrip_protobuf() -> None:
+    # Body bytes are whatever the encoder gave us; decode just unwraps the
+    # 12-byte header. Real protobuf decode happens in a higher layer.
+    payload = bytes.fromhex("0d0000a8410d0000484200000000")
+    pkt = encode("topic/y", payload, encoding=ENCODING_PROTOBUF)
+    crc, encoding, body = decode(pkt)
+    assert crc == topic_crc32("topic/y")
+    assert encoding == ENCODING_PROTOBUF
     assert body == payload
 
 
@@ -63,21 +72,15 @@ def test_oversize_payload_rejected_far_above_limit() -> None:
         encode("t", b"x" * 65535)
 
 
-def test_retain_hint_flag() -> None:
-    pkt = encode("t", b"", flags=FLAG_RETAIN_HINT)
-    _, flags, _ = decode(pkt)
-    assert flags & FLAG_RETAIN_HINT
+def test_unknown_encoding_rejected_in_encode() -> None:
+    with pytest.raises(ValueError, match="unknown encoding"):
+        encode("t", b"", encoding=0x02)
 
 
-def test_reserved_flag_rejected_in_encode() -> None:
-    with pytest.raises(ValueError):
-        encode("t", b"", flags=0x04)
-
-
-def test_reserved_flag_rejected_in_decode() -> None:
+def test_unknown_encoding_rejected_in_decode() -> None:
     pkt = bytearray(encode("t", b""))
-    pkt[3] = 0x80  # set a reserved bit
-    with pytest.raises(WireError):
+    pkt[3] = 0x7F  # any reserved value
+    with pytest.raises(WireError, match="unknown encoding"):
         decode(bytes(pkt))
 
 
@@ -112,5 +115,6 @@ def test_reserved_bytes_ignored_on_decode() -> None:
     pkt = bytearray(encode("t", b"hi"))
     pkt[10] = 0xAB
     pkt[11] = 0xCD
-    crc, flags, body = decode(bytes(pkt))
+    crc, encoding, body = decode(bytes(pkt))
     assert body == b"hi"
+    assert encoding == ENCODING_RAW

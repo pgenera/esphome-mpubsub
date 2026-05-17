@@ -45,10 +45,12 @@ class MulticastSensor : public sensor::Sensor, public Component {
         int n = std::snprintf(buf, sizeof(buf), "%.6g", state);
         if (n < 0)
           return;
+        // Sensor states travel as RAW ASCII bytes; typed-message publishing
+        // is a separate code path layered on top later.
         this->parent_->publish(this->topic_,
                                std::span<const uint8_t>(reinterpret_cast<const uint8_t *>(buf),
                                                         static_cast<size_t>(n)),
-                               FLAG_TEXT);
+                               Encoding::RAW);
       });
     }
   }

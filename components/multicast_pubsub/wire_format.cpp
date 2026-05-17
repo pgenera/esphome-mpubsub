@@ -2,11 +2,11 @@
 
 namespace esphome::multicast_pubsub {
 
-size_t encode_header(uint32_t topic_crc, uint8_t flags, uint16_t payload_len, uint8_t out[HEADER_LEN]) {
+size_t encode_header(uint32_t topic_crc, Encoding encoding, uint16_t payload_len, uint8_t out[HEADER_LEN]) {
   out[0] = MAGIC0;
   out[1] = MAGIC1;
   out[2] = VERSION;
-  out[3] = flags;
+  out[3] = static_cast<uint8_t>(encoding);
   out[4] = uint8_t(topic_crc);
   out[5] = uint8_t(topic_crc >> 8);
   out[6] = uint8_t(topic_crc >> 16);
@@ -25,15 +25,16 @@ DecodeError decode(std::span<const uint8_t> data, DecodedPacket *out) {
     return DecodeError::BAD_MAGIC;
   if (data[2] != VERSION)
     return DecodeError::BAD_VERSION;
-  uint8_t flags = data[3];
-  if (flags & RESERVED_FLAG_MASK)
-    return DecodeError::RESERVED_FLAGS;
+  uint8_t enc = data[3];
+  if (!is_known_encoding(enc))
+    return DecodeError::UNKNOWN_ENCODING;
   uint32_t crc = uint32_t(data[4]) | (uint32_t(data[5]) << 8) | (uint32_t(data[6]) << 16) | (uint32_t(data[7]) << 24);
   uint16_t payload_len = uint16_t(data[8]) | (uint16_t(data[9]) << 8);
   if (HEADER_LEN + payload_len != data.size())
     return DecodeError::LENGTH_MISMATCH;
+  // bytes 10..11 are reserved; ignored on decode for forward-compatibility.
   out->topic_crc = crc;
-  out->flags = flags;
+  out->encoding = static_cast<Encoding>(enc);
   out->payload = data.subspan(HEADER_LEN);
   return DecodeError::OK;
 }

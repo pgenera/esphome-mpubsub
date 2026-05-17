@@ -1,11 +1,11 @@
 // CLI harness for the C++ wire-format encoder/decoder.
 //
 // Protocol on stdin (one command per line):
-//   E <topic_crc_hex> <flags_hex> <payload_hex>
+//   E <topic_crc_hex> <encoding_hex> <payload_hex>
 //   D <packet_hex>
 //
 // Output for E: "OK <encoded_hex>"
-// Output for D: "OK <topic_crc_hex> <flags_hex> <payload_hex>" or "ERR <code>"
+// Output for D: "OK <topic_crc_hex> <encoding_hex> <payload_hex>" or "ERR <code>"
 
 #include <cstdint>
 #include <cstdio>
@@ -44,8 +44,8 @@ static const char *err_name(DecodeError e) {
       return "BAD_MAGIC";
     case DecodeError::BAD_VERSION:
       return "BAD_VERSION";
-    case DecodeError::RESERVED_FLAGS:
-      return "RESERVED_FLAGS";
+    case DecodeError::UNKNOWN_ENCODING:
+      return "UNKNOWN_ENCODING";
     case DecodeError::LENGTH_MISMATCH:
       return "LENGTH_MISMATCH";
   }
@@ -60,14 +60,14 @@ int main() {
     char cmd = line[0];
     std::string rest = line.substr(2);
     if (cmd == 'E') {
-      // E <crc> <flags> <payload>
+      // E <crc> <encoding> <payload>
       size_t s1 = rest.find(' ');
       size_t s2 = rest.find(' ', s1 + 1);
       uint32_t crc = static_cast<uint32_t>(std::strtoul(rest.substr(0, s1).c_str(), nullptr, 16));
-      uint8_t flags = static_cast<uint8_t>(std::strtoul(rest.substr(s1 + 1, s2 - s1 - 1).c_str(), nullptr, 16));
+      uint8_t enc_raw = static_cast<uint8_t>(std::strtoul(rest.substr(s1 + 1, s2 - s1 - 1).c_str(), nullptr, 16));
       auto payload = from_hex(rest.substr(s2 + 1));
       uint8_t header[HEADER_LEN];
-      encode_header(crc, flags, static_cast<uint16_t>(payload.size()), header);
+      encode_header(crc, static_cast<Encoding>(enc_raw), static_cast<uint16_t>(payload.size()), header);
       std::printf("OK ");
       emit_hex(header, HEADER_LEN);
       emit_hex(payload.data(), payload.size());
@@ -79,7 +79,7 @@ int main() {
       if (err != DecodeError::OK) {
         std::printf("ERR %s\n", err_name(err));
       } else {
-        std::printf("OK %08x %02x ", pkt.topic_crc, pkt.flags);
+        std::printf("OK %08x %02x ", pkt.topic_crc, static_cast<uint8_t>(pkt.encoding));
         emit_hex(pkt.payload.data(), pkt.payload.size());
         std::printf("\n");
       }

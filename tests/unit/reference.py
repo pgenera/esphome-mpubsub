@@ -23,9 +23,11 @@ HEADER_LEN = 12
 MAX_DATAGRAM = 1232  # IPv6 min MTU (1280, RFC 8200 §5) - 40 (IPv6) - 8 (UDP)
 MAX_PAYLOAD = MAX_DATAGRAM - HEADER_LEN  # = 1220
 
-FLAG_TEXT = 0x01
-FLAG_RETAIN_HINT = 0x02
-RESERVED_FLAG_MASK = 0xFC
+# Body-encoding enum -- one of these goes in header byte 3.
+ENCODING_RAW = 0x00
+ENCODING_PROTOBUF = 0x01
+KNOWN_ENCODINGS = (ENCODING_RAW, ENCODING_PROTOBUF)
+# Values 0x02..0xFF are reserved; receivers MUST drop unknown encodings.
 
 SCOPE_LINK_LOCAL = 0x2
 SCOPE_SITE_LOCAL = 0x5
@@ -62,28 +64,24 @@ def topic_crc32(topic: str) -> int:
 class Message:
     topic: str
     payload: bytes
-    flags: int = 0
-
-    @property
-    def is_text(self) -> bool:
-        return bool(self.flags & FLAG_TEXT)
+    encoding: int = ENCODING_RAW
 
 
-def encode(topic: str, payload: bytes, flags: int = 0) -> bytes:
+def encode(topic: str, payload: bytes, encoding: int = ENCODING_RAW) -> bytes:
     """Serialize a publication to the on-wire byte sequence.
 
     Raises ``ValueError`` if the payload exceeds :data:`MAX_PAYLOAD` or the
-    flags set any reserved bits.
+    encoding value is unknown.
     """
     if len(payload) > MAX_PAYLOAD:
         raise ValueError(f"payload too large ({len(payload)} > {MAX_PAYLOAD})")
-    if flags & RESERVED_FLAG_MASK:
-        raise ValueError(f"reserved flag bits set: {flags:#04x}")
+    if encoding not in KNOWN_ENCODINGS:
+        raise ValueError(f"unknown encoding: {encoding:#04x}")
     crc = topic_crc32(topic)
-    # 12-byte header: MAGIC(2) VER(1) FLAGS(1) CRC(4 LE) PAYLOAD_LEN(2 LE) RESERVED(2)
+    # 12-byte header: MAGIC(2) VER(1) ENC(1) CRC(4 LE) PAYLOAD_LEN(2 LE) RESERVED(2)
     header = (
         MAGIC
-        + bytes((VERSION, flags & 0xFF))
+        + bytes((VERSION, encoding & 0xFF))
         + struct.pack("<IH", crc, len(payload))
         + b"\x00\x00"
     )
@@ -92,13 +90,13 @@ def encode(topic: str, payload: bytes, flags: int = 0) -> bytes:
 
 
 class WireError(ValueError):
-    """Raised by :func:`decode` when a packet violates the v1 spec."""
+    """Raised by :func:`decode` when a packet violates the spec."""
 
 
 def decode(data: bytes) -> tuple[int, int, bytes]:
     """Parse a datagram.
 
-    Returns ``(topic_crc32, flags, payload)``.
+    Returns ``(topic_crc32, encoding, payload)``.
 
     Raises :class:`WireError` if any validation rule fails. The caller is
     expected to match ``topic_crc32`` against the subscriptions on this node.
@@ -110,15 +108,15 @@ def decode(data: bytes) -> tuple[int, int, bytes]:
     version = data[2]
     if version != VERSION:
         raise WireError(f"unsupported version {version}")
-    flags = data[3]
-    if flags & RESERVED_FLAG_MASK:
-        raise WireError(f"reserved flag bits set: {flags:#04x}")
+    encoding = data[3]
+    if encoding not in KNOWN_ENCODINGS:
+        raise WireError(f"unknown encoding: {encoding:#04x}")
     crc, payload_len = struct.unpack("<IH", data[4:10])
-    # Bytes 10-11 are reserved; receivers ignore their value in v1 to allow
+    # Bytes 10-11 are reserved; receivers ignore their value to allow
     # forward-compatible extensions, matching the C++ decoder.
     if HEADER_LEN + payload_len != len(data):
         raise WireError(
             f"length mismatch: header says {payload_len}, datagram has "
             f"{len(data) - HEADER_LEN}"
         )
-    return crc, flags, data[HEADER_LEN:]
+    return crc, encoding, data[HEADER_LEN:]
