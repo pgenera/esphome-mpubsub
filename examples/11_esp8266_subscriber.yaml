@@ -1,10 +1,8 @@
-# Example 11 (ESP8266): Drop-in skeleton for an ESP8266 subscriber.
+# Example 11 (ESP8266): subscriber.
 #
-# See `10_esp8266_publisher.yaml` for the platform caveat: on ESP8266
-# the component compiles but is a no-op at runtime, because
-# arduino-esp8266's precompiled lwip2 has `LWIP_SOCKET=0`. The YAML
-# below is structurally complete and ready to start receiving once
-# ESP8266 support lands.
+# See `10_esp8266_publisher.yaml` for the platform notes -- the ESP8266
+# build of multicast_pubsub uses lwip's raw UDP/MLD6 API directly,
+# enabled by `network: enable_ipv6: true`.
 
 esphome:
   name: pubsub-esp8266-subscriber

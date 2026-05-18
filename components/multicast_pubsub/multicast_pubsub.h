@@ -11,9 +11,19 @@
 #include <vector>
 
 #include "esphome/components/sensor/sensor.h"
-#include "esphome/components/socket/socket.h"
 #include "esphome/core/component.h"
 #include "esphome/core/helpers.h"
+
+// arduino-esp8266 ships precompiled lwip2 with LWIP_SOCKET=0, so the
+// ESPHome `socket::` abstraction (BSD-style) can't reach IPv6 multicast
+// there. On ESP8266 we call lwip's raw UDP / MLD6 API directly; on every
+// other platform we keep the socket-based path.
+#ifdef USE_ESP8266
+struct udp_pcb;
+struct pbuf;
+#else
+#include "esphome/components/socket/socket.h"
+#endif
 
 #include "topic_hash.h"
 #include "wire_format.h"
@@ -132,12 +142,37 @@ class MulticastPubSub : public Component {
   // Look up `topic` -- create + join the multicast group if missing.
   // Used by both raw subscribe() and typed subscribe_typed<T>().
   Subscription *find_or_create_subscription_(const std::string &topic);
+  // Common path for an incoming datagram: validate, count, dispatch.
+  // Called from loop() on socket-based platforms and from the lwip
+  // recv callback on ESP8266.
+  void on_packet_(std::span<const uint8_t> raw);
+  // Pump the auto-created diagnostic sensors. Both platform paths call
+  // this from loop() so the lwip-raw build still emits prometheus data.
+  void publish_metrics_();
+#ifdef USE_ESP8266
+  // Join `group` via mld6_joingroup. Called from setup() for groups
+  // that exist before the stack is up, and from find_or_create_subscription_
+  // for subscriptions added later.
+  void join_group_(const GroupAddr &group, const char *topic);
+
+ public:
+  // Static lwip raw recv trampoline. Public so the C-linkage callback
+  // shim can reach it. Not part of the user-facing API -- use subscribe()
+  // / subscribe_typed() instead.
+  static void recv_trampoline_(void *arg, struct udp_pcb *pcb, struct pbuf *p, const void *addr, uint16_t port);
+
+ protected:
+#endif
 
   uint16_t port_{18512};
   Scope scope_{Scope::LINK_LOCAL};
   uint8_t hops_{1};
 
+#ifdef USE_ESP8266
+  struct udp_pcb *pcb_{nullptr};
+#else
   std::unique_ptr<socket::Socket> socket_{};
+#endif
   std::vector<Subscription> subscriptions_{};
 
   sensor::Sensor *messages_sent_sensor_{nullptr};

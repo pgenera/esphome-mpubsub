@@ -16,37 +16,256 @@ static const char *const TAG = "multicast_pubsub";
 
 // arduino-esp8266 ships precompiled lwip2 with LWIP_SOCKET=0, so
 // `lwip/sockets.h` exposes none of the BSD-style symbols we need
-// (IPPROTO_UDP, IPV6_JOIN_GROUP, ipv6_mreq, sockaddr_in6, ...). Until we
-// add a native lwip-netconn / WiFiUDP path for that platform, the
-// component still has to compile so users can drop it into shared YAML
-// without breaking their build. We split into a real implementation
-// (every other platform) and a no-op stub (ESP8266) below.
+// (IPPROTO_UDP, IPV6_JOIN_GROUP, ipv6_mreq, sockaddr_in6, ...). On that
+// platform we drop down to lwip's raw callback API (udp_*, mld6_*),
+// which the IPv6 lwip variant selected by `network: enable_ipv6: true`
+// (-DPIO_FRAMEWORK_ARDUINO_LWIP2_IPV6_LOW_MEMORY) does expose. The
+// `socket::` abstraction is used on every other platform.
 #if defined(USE_ESP8266)
+
+#include "lwip/ip_addr.h"
+#include "lwip/mld6.h"
+#include "lwip/pbuf.h"
+#include "lwip/udp.h"
 
 namespace esphome::multicast_pubsub {
 
+namespace {
+
+// lwip raw recv callback. ESP8266 NONOS is single-tasked, so this fires
+// on the same task as MulticastPubSub::loop() -- no locking needed.
+// Calls back through the static recv_trampoline_ member so it can reach
+// the (protected) on_packet_ method.
+void recv_cb(void *arg, struct udp_pcb *pcb, struct pbuf *p, const ip_addr_t *addr, u16_t port) {
+  MulticastPubSub::recv_trampoline_(arg, pcb, p, static_cast<const void *>(addr), port);
+}
+
+// Translate a 16-byte GroupAddr into an ip_addr_t holding the same IPv6
+// bits. The GroupAddr is already in network byte order (the wire format
+// of an IPv6 address); ip6_addr_t.addr is u32_t[4], also in network
+// byte order, so a memcpy is correct without any endian fixup.
+ip_addr_t to_ip_addr(const GroupAddr &group) {
+  ip_addr_t out;
+  std::memset(&out, 0, sizeof(out));
+  std::memcpy(ip_2_ip6(&out)->addr, group.data(), 16);
+  IP_SET_TYPE_VAL(out, IPADDR_TYPE_V6);
+  return out;
+}
+
+}  // namespace
+
+void MulticastPubSub::recv_trampoline_(void *arg, struct udp_pcb * /*pcb*/, struct pbuf *p,
+                                       const void * /*addr*/, uint16_t /*port*/) {
+  if (p == nullptr)
+    return;
+  auto *self = static_cast<MulticastPubSub *>(arg);
+  std::array<uint8_t, MAX_DATAGRAM> buf;
+  uint16_t copied = pbuf_copy_partial(p, buf.data(), std::min<uint16_t>(p->tot_len, buf.size()), 0);
+  pbuf_free(p);
+  self->on_packet_(std::span<const uint8_t>(buf.data(), copied));
+}
+
 void MulticastPubSub::setup() {
-  ESP_LOGE(TAG, "multicast_pubsub is not implemented on ESP8266: arduino-esp8266 builds lwip2 with "
-                "LWIP_SOCKET=0, so the BSD-style IPv6 multicast API isn't available. The component "
-                "is a no-op on this device.");
-  this->mark_failed();
+  this->pcb_ = udp_new_ip_type(IPADDR_TYPE_V6);
+  if (this->pcb_ == nullptr) {
+    ESP_LOGE(TAG, "udp_new_ip_type(IPV6) returned null");
+    this->status_set_error(LOG_STR("udp_new_ip_type failed"));
+    this->mark_failed();
+    return;
+  }
+  // Bind to [::]:port so packets to any of our joined groups arrive.
+  err_t err = udp_bind(this->pcb_, IP6_ADDR_ANY, this->port_);
+  if (err != ERR_OK) {
+    ESP_LOGE(TAG, "udp_bind() failed: err %d", err);
+    udp_remove(this->pcb_);
+    this->pcb_ = nullptr;
+    this->status_set_error(LOG_STR("udp_bind failed"));
+    this->mark_failed();
+    return;
+  }
+  // Outgoing multicast hop limit. The IPv6 lwip variant gates this on
+  // LWIP_MULTICAST_TX_OPTIONS; the macro is a no-op if absent.
+#if LWIP_MULTICAST_TX_OPTIONS
+  udp_set_multicast_ttl(this->pcb_, this->hops_);
+#endif
+  udp_recv(this->pcb_, recv_cb, this);
+
+  // Join groups for any subscriptions registered before setup() ran.
+  for (auto &sub : this->subscriptions_) {
+    this->join_group_(sub.group, sub.topic.c_str());
+  }
 }
-void MulticastPubSub::loop() {}
+
+void MulticastPubSub::join_group_(const GroupAddr &group, const char *topic) {
+  ip6_addr_t g6;
+  std::memcpy(g6.addr, group.data(), 16);
+#if LWIP_IPV6_SCOPES
+  ip6_addr_clear_zone(&g6);
+#endif
+  err_t err = mld6_joingroup(IP6_ADDR_ANY6, &g6);
+  if (err != ERR_OK) {
+    ESP_LOGW(TAG, "mld6_joingroup failed for topic '%s': err %d", topic, err);
+    this->status_set_warning(LOG_STR("Failed to join multicast group"));
+  }
+}
+
+void MulticastPubSub::loop() { this->publish_metrics_(); }
+
 void MulticastPubSub::dump_config() {
-  ESP_LOGCONFIG(TAG, "Multicast Pub/Sub: (unsupported on ESP8266, no-op stub)");
+  const char *scope_name = "link-local";
+  switch (this->scope_) {
+    case Scope::LINK_LOCAL:
+      scope_name = "link-local";
+      break;
+    case Scope::SITE_LOCAL:
+      scope_name = "site-local";
+      break;
+    case Scope::ORG_LOCAL:
+      scope_name = "organization-local";
+      break;
+  }
+  ESP_LOGCONFIG(TAG,
+                "Multicast Pub/Sub (ESP8266 / lwip raw):\n"
+                "  Port: %u\n"
+                "  Scope: %s\n"
+                "  Hops: %u\n"
+                "  Subscriptions: %u",
+                this->port_, scope_name, this->hops_, static_cast<unsigned>(this->subscriptions_.size()));
+  for (const auto &sub : this->subscriptions_) {
+    char addr_buf[64];
+    group_to_string(sub.group, addr_buf, sizeof(addr_buf));
+    ESP_LOGCONFIG(TAG, "    '%s' -> [%s]:%u (crc=%08x, raw=%zu typed=%zu)", sub.topic.c_str(), addr_buf, this->port_,
+                  sub.crc, sub.raw_callbacks.size(), sub.typed_callbacks.size());
+  }
 }
-Subscription *MulticastPubSub::find_subscription_(const std::string & /*topic*/) { return nullptr; }
-Subscription *MulticastPubSub::find_or_create_subscription_(const std::string & /*topic*/) { return nullptr; }
-void MulticastPubSub::subscribe(const std::string & /*topic*/, MessageCallback /*cb*/) {}
-bool MulticastPubSub::publish(const std::string & /*topic*/, std::span<const uint8_t> /*payload*/,
-                              Encoding /*encoding*/) {
-  return false;
+
+Subscription *MulticastPubSub::find_subscription_(const std::string &topic) {
+  for (auto &sub : this->subscriptions_) {
+    if (sub.topic == topic)
+      return &sub;
+  }
+  return nullptr;
 }
-bool MulticastPubSub::publish_dynamic(const std::string & /*topic*/, uint16_t /*schema_id*/,
-                                      std::span<const uint8_t> /*proto_bytes*/) {
-  return false;
+
+Subscription *MulticastPubSub::find_or_create_subscription_(const std::string &topic) {
+  if (Subscription *existing = this->find_subscription_(topic))
+    return existing;
+  Subscription sub;
+  sub.topic = topic;
+  sub.crc = topic_crc32(topic);
+  sub.group = topic_to_group(topic, this->scope_);
+  this->subscriptions_.push_back(std::move(sub));
+  if (this->pcb_ != nullptr) {
+    auto &just_added = this->subscriptions_.back();
+    this->join_group_(just_added.group, just_added.topic.c_str());
+  }
+  return &this->subscriptions_.back();
 }
-void MulticastPubSub::deliver_(uint32_t /*crc*/, Encoding /*encoding*/, std::span<const uint8_t> /*payload*/) {}
+
+void MulticastPubSub::subscribe(const std::string &topic, MessageCallback cb) {
+  Subscription *sub = this->find_or_create_subscription_(topic);
+  sub->raw_callbacks.push_back(std::move(cb));
+}
+
+bool MulticastPubSub::publish(const std::string &topic, std::span<const uint8_t> payload, Encoding encoding) {
+  if (this->pcb_ == nullptr) {
+    ESP_LOGW(TAG, "publish(%s): pcb not ready", topic.c_str());
+    return false;
+  }
+  if (payload.size() > MAX_PAYLOAD) {
+    ESP_LOGE(TAG, "publish('%s') rejected: payload %zu bytes exceeds max %zu (datagram limit %zu - 12-byte header)",
+             topic.c_str(), payload.size(), MAX_PAYLOAD, MAX_DATAGRAM);
+    this->status_set_warning(LOG_STR("oversize publish payload"));
+    return false;
+  }
+  uint32_t crc = topic_crc32(topic);
+  GroupAddr group = topic_to_group(topic, this->scope_);
+  size_t total = HEADER_LEN + payload.size();
+
+  struct pbuf *p = pbuf_alloc(PBUF_TRANSPORT, static_cast<u16_t>(total), PBUF_RAM);
+  if (p == nullptr) {
+    ESP_LOGW(TAG, "publish(%s): pbuf_alloc(%zu) failed", topic.c_str(), total);
+    return false;
+  }
+  auto *buf = static_cast<uint8_t *>(p->payload);
+  encode_header(crc, encoding, static_cast<uint16_t>(payload.size()), buf);
+  std::memcpy(buf + HEADER_LEN, payload.data(), payload.size());
+
+  ip_addr_t dest = to_ip_addr(group);
+  err_t err = udp_sendto(this->pcb_, p, &dest, this->port_);
+  pbuf_free(p);
+  if (err != ERR_OK) {
+    ESP_LOGW(TAG, "publish(%s): udp_sendto err %d", topic.c_str(), err);
+    return false;
+  }
+  this->messages_sent_++;
+  ESP_LOGV(TAG, "published %zu bytes to '%s'", payload.size(), topic.c_str());
+  return true;
+}
+
+bool MulticastPubSub::publish_dynamic(const std::string &topic, uint16_t schema_id,
+                                      std::span<const uint8_t> proto_bytes) {
+  std::array<uint8_t, MAX_PAYLOAD> buf;
+  if (proto_bytes.size() + 2 > MAX_PAYLOAD) {
+    ESP_LOGE(TAG, "publish_dynamic('%s'): payload %zu bytes exceeds max %zu", topic.c_str(), proto_bytes.size() + 2,
+             MAX_PAYLOAD);
+    return false;
+  }
+  buf[0] = static_cast<uint8_t>(schema_id);
+  buf[1] = static_cast<uint8_t>(schema_id >> 8);
+  std::memcpy(buf.data() + 2, proto_bytes.data(), proto_bytes.size());
+  return this->publish(topic, std::span<const uint8_t>(buf.data(), 2 + proto_bytes.size()), Encoding::PROTOBUF);
+}
+
+void MulticastPubSub::on_packet_(std::span<const uint8_t> raw) {
+  DecodedPacket pkt;
+  auto err = decode(raw, &pkt);
+  if (err != DecodeError::OK) {
+    ESP_LOGV(TAG, "drop packet: decode err %u", static_cast<unsigned>(err));
+    return;
+  }
+  this->messages_received_++;
+  this->deliver_(pkt.topic_crc, pkt.encoding, pkt.payload);
+}
+
+void MulticastPubSub::deliver_(uint32_t crc, Encoding encoding, std::span<const uint8_t> payload) {
+  for (auto &sub : this->subscriptions_) {
+    if (sub.crc != crc)
+      continue;
+    if (encoding == Encoding::RAW) {
+      for (auto &cb : sub.raw_callbacks)
+        cb(payload);
+    } else if (encoding == Encoding::PROTOBUF) {
+      if (payload.size() < 2) {
+        ESP_LOGV(TAG, "drop PROTOBUF packet: body too short for SCHEMA_ID (%zu)", payload.size());
+        continue;
+      }
+      uint16_t schema_id = static_cast<uint16_t>(payload[0]) | (static_cast<uint16_t>(payload[1]) << 8);
+      auto body = payload.subspan(2);
+      bool matched_any = false;
+      for (auto &tc : sub.typed_callbacks) {
+        if (tc.schema_id == schema_id) {
+          tc.callback(body);
+          matched_any = true;
+        }
+      }
+      if (!matched_any) {
+        ESP_LOGV(TAG, "no typed callback for topic '%s' schema_id=%04x", sub.topic.c_str(), schema_id);
+      }
+    }
+  }
+}
+
+void MulticastPubSub::publish_metrics_() {
+  if (this->messages_sent_sensor_ != nullptr && this->messages_sent_ != this->last_published_sent_) {
+    this->messages_sent_sensor_->publish_state(static_cast<float>(this->messages_sent_));
+    this->last_published_sent_ = this->messages_sent_;
+  }
+  if (this->messages_received_sensor_ != nullptr && this->messages_received_ != this->last_published_received_) {
+    this->messages_received_sensor_->publish_state(static_cast<float>(this->messages_received_));
+    this->last_published_received_ = this->messages_received_;
+  }
+}
 
 }  // namespace esphome::multicast_pubsub
 
@@ -107,22 +326,30 @@ void MulticastPubSub::setup() {
 }
 
 void MulticastPubSub::loop() {
-  if (!this->socket_)
-    return;
-  std::array<uint8_t, MAX_DATAGRAM> buf;
-  for (;;) {
-    auto n = this->socket_->read(buf.data(), buf.size());
-    if (n <= 0)
-      break;
-    DecodedPacket pkt;
-    auto err = decode(std::span<const uint8_t>(buf.data(), static_cast<size_t>(n)), &pkt);
-    if (err != DecodeError::OK) {
-      ESP_LOGV(TAG, "drop packet: decode err %u", static_cast<unsigned>(err));
-      continue;
+  if (this->socket_) {
+    std::array<uint8_t, MAX_DATAGRAM> buf;
+    for (;;) {
+      auto n = this->socket_->read(buf.data(), buf.size());
+      if (n <= 0)
+        break;
+      this->on_packet_(std::span<const uint8_t>(buf.data(), static_cast<size_t>(n)));
     }
-    this->messages_received_++;
-    this->deliver_(pkt.topic_crc, pkt.encoding, pkt.payload);
   }
+  this->publish_metrics_();
+}
+
+void MulticastPubSub::on_packet_(std::span<const uint8_t> raw) {
+  DecodedPacket pkt;
+  auto err = decode(raw, &pkt);
+  if (err != DecodeError::OK) {
+    ESP_LOGV(TAG, "drop packet: decode err %u", static_cast<unsigned>(err));
+    return;
+  }
+  this->messages_received_++;
+  this->deliver_(pkt.topic_crc, pkt.encoding, pkt.payload);
+}
+
+void MulticastPubSub::publish_metrics_() {
   if (this->messages_sent_sensor_ != nullptr && this->messages_sent_ != this->last_published_sent_) {
     this->messages_sent_sensor_->publish_state(static_cast<float>(this->messages_sent_));
     this->last_published_sent_ = this->messages_sent_;
