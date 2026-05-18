@@ -50,6 +50,13 @@ struct Subscription {
   // supported (e.g. listen for both RoomClimate and a sibling schema on
   // the same topic via a different sensor type).
   std::vector<TypedCallback> typed_callbacks;
+  // ESP8266-only: tracks whether mld6_joingroup has been called for this
+  // group. The wifi netif comes up asynchronously, so joins are deferred
+  // until netif_default is set (see MulticastPubSub::loop on USE_ESP8266).
+  // Defaults to true so the socket-based path treats every subscription
+  // as joined-at-creation (which it is, via IPV6_JOIN_GROUP in setup()
+  // or find_or_create_subscription_).
+  bool joined{true};
 };
 
 class MulticastPubSub : public Component {

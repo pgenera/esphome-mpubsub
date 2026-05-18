@@ -25,6 +25,7 @@ static const char *const TAG = "multicast_pubsub";
 
 #include "lwip/ip_addr.h"
 #include "lwip/mld6.h"
+#include "lwip/netif.h"
 #include "lwip/pbuf.h"
 #include "lwip/udp.h"
 
@@ -90,26 +91,49 @@ void MulticastPubSub::setup() {
 #endif
   udp_recv(this->pcb_, recv_cb, this);
 
-  // Join groups for any subscriptions registered before setup() ran.
+  // Don't try to join groups yet -- on ESP8266 wifi (and its netif) come
+  // up asynchronously, so `netif_default` is often still null at
+  // AFTER_WIFI setup priority. Mark all existing subscriptions as
+  // not-yet-joined; loop() handles them once the netif appears.
   for (auto &sub : this->subscriptions_) {
-    this->join_group_(sub.group, sub.topic.c_str());
+    sub.joined = false;
   }
 }
 
 void MulticastPubSub::join_group_(const GroupAddr &group, const char *topic) {
+  if (netif_default == nullptr)
+    return;
   ip6_addr_t g6;
   std::memcpy(g6.addr, group.data(), 16);
 #if LWIP_IPV6_SCOPES
   ip6_addr_clear_zone(&g6);
 #endif
-  err_t err = mld6_joingroup(IP6_ADDR_ANY6, &g6);
+  err_t err = mld6_joingroup_netif(netif_default, &g6);
   if (err != ERR_OK) {
-    ESP_LOGW(TAG, "mld6_joingroup failed for topic '%s': err %d", topic, err);
+    ESP_LOGW(TAG, "mld6_joingroup_netif failed for topic '%s': err %d", topic, err);
     this->status_set_warning(LOG_STR("Failed to join multicast group"));
   }
 }
 
-void MulticastPubSub::loop() { this->publish_metrics_(); }
+void MulticastPubSub::loop() {
+  // Drive deferred MLD joins and the pcb's multicast-netif index once
+  // wifi's netif shows up. Cheap to check each loop -- a pointer compare
+  // and (usually) an early-exit boolean scan.
+  if (this->pcb_ != nullptr && netif_default != nullptr) {
+#if LWIP_MULTICAST_TX_OPTIONS
+    if (this->pcb_->mcast_ifindex == 0) {
+      udp_set_multicast_netif_index(this->pcb_, netif_get_index(netif_default));
+    }
+#endif
+    for (auto &sub : this->subscriptions_) {
+      if (!sub.joined) {
+        this->join_group_(sub.group, sub.topic.c_str());
+        sub.joined = true;  // set even on failure so we don't log-spam
+      }
+    }
+  }
+  this->publish_metrics_();
+}
 
 void MulticastPubSub::dump_config() {
   const char *scope_name = "link-local";
@@ -154,11 +178,8 @@ Subscription *MulticastPubSub::find_or_create_subscription_(const std::string &t
   sub.topic = topic;
   sub.crc = topic_crc32(topic);
   sub.group = topic_to_group(topic, this->scope_);
+  sub.joined = false;  // loop() picks it up once netif_default is available
   this->subscriptions_.push_back(std::move(sub));
-  if (this->pcb_ != nullptr) {
-    auto &just_added = this->subscriptions_.back();
-    this->join_group_(just_added.group, just_added.topic.c_str());
-  }
   return &this->subscriptions_.back();
 }
 
@@ -192,10 +213,18 @@ bool MulticastPubSub::publish(const std::string &topic, std::span<const uint8_t>
   std::memcpy(buf + HEADER_LEN, payload.data(), payload.size());
 
   ip_addr_t dest = to_ip_addr(group);
-  err_t err = udp_sendto(this->pcb_, p, &dest, this->port_);
+  // For IPv6 multicast lwip needs the egress netif spelled out
+  // explicitly (no route lookup for link-local). udp_sendto on its own
+  // returns ERR_RTE (-4); udp_sendto_if uses the netif we pass.
+  if (netif_default == nullptr) {
+    ESP_LOGW(TAG, "publish(%s): no netif yet", topic.c_str());
+    pbuf_free(p);
+    return false;
+  }
+  err_t err = udp_sendto_if(this->pcb_, p, &dest, this->port_, netif_default);
   pbuf_free(p);
   if (err != ERR_OK) {
-    ESP_LOGW(TAG, "publish(%s): udp_sendto err %d", topic.c_str(), err);
+    ESP_LOGW(TAG, "publish(%s): udp_sendto_if err %d", topic.c_str(), err);
     return false;
   }
   this->messages_sent_++;
