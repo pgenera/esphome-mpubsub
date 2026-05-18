@@ -96,6 +96,14 @@ class MulticastPubSub : public Component {
                          Encoding::PROTOBUF);
   }
 
+  /// Publish a pre-encoded protobuf body with an explicit ``schema_id``.
+  /// Used by bridges or anything that builds messages at runtime via
+  /// :class:`DynamicMessage` rather than through a codegen-generated
+  /// typed struct. ``schema_id`` may be ``0`` for "schemaless" messages
+  /// that no typed subscriber will match -- only ``DynamicReader``-style
+  /// consumers will see them.
+  bool publish_dynamic(const std::string &topic, uint16_t schema_id, std::span<const uint8_t> proto_bytes);
+
   /// Construct a fluent builder for a typed message. Mirrors
   /// esphome::light::LightState::make_call() -- chain set_<field>() calls
   /// and finish with perform() to encode and publish.

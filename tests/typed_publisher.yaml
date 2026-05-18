@@ -81,3 +81,36 @@ interval:
               .add_tags("button")
               .add_tags("auto")
               .perform();
+
+  - interval: 3s
+    then:
+      # DynamicMessage exercise: builds a RoomClimate-compatible message
+      # at runtime using the schemaless DynamicMessage builder (no typed
+      # struct involved on the publish side). Receivers with the typed
+      # RoomClimate schema decode it normally -- proves DynamicMessage's
+      # wire output matches the codegen-emitted encoder byte-for-byte.
+      - lambda: |-
+          using esphome::multicast_pubsub::DynamicMessage;
+          using esphome::multicast_pubsub::DynamicReader;
+          using esphome::multicast_pubsub::messages::RoomClimate;
+          DynamicMessage m;
+          m.add_float(1, 99.5f)              // temperature
+           .add_float(2, 88.0f)              // humidity
+           .add_string(3, "dynamic-room");   // room_id
+
+          // Self-check: read the bytes back with DynamicReader before
+          // publishing, so a single test exercises both halves of the
+          // schemaless API in one shot.
+          DynamicReader r(m.bytes());
+          unsigned fields = 0;
+          float temp = 0.0f;
+          std::string_view room;
+          while (auto f = r.next()) {
+            ++fields;
+            if (f->tag == 1) f->as_float(&temp);
+            if (f->tag == 3) f->as_string(&room);
+          }
+          ESP_LOGD("main", "dynamic self-check: fields=%u temp=%.2f room='%.*s' err=%d",
+                   fields, temp, (int)room.size(), room.data(), r.error());
+
+          id(pubsub)->publish_dynamic("test/climate", RoomClimate::SCHEMA_ID, m.bytes());

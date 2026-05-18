@@ -11,6 +11,11 @@ COMP := ../../components/multicast_pubsub
 .PHONY: all clean
 all: topic_hash_test wire_format_test wire_format_test_san topic_hash_test_san
 
+# DynamicMessage / DynamicReader are exercised end-to-end via the host
+# integration build (tests/typed_publisher.yaml's dynamic-publish lambda)
+# rather than a standalone harness -- building those classes outside
+# ESPHome would require pulling in core/helpers, defines, log, etc.
+
 topic_hash_test: topic_hash_main.cpp $(COMP)/topic_hash.cpp $(COMP)/topic_hash.h \
                  $(COMP)/sha256.cpp $(COMP)/sha256.h
 	$(CXX) $(CXXFLAGS) -I$(COMP) -o $@ topic_hash_main.cpp $(COMP)/topic_hash.cpp $(COMP)/sha256.cpp

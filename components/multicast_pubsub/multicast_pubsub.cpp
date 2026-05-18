@@ -178,6 +178,23 @@ bool MulticastPubSub::publish(const std::string &topic, std::span<const uint8_t>
   return true;
 }
 
+bool MulticastPubSub::publish_dynamic(const std::string &topic, uint16_t schema_id,
+                                      std::span<const uint8_t> proto_bytes) {
+  // Same wire layout as the typed publish<T>: ENCODING=PROTOBUF, body =
+  // SCHEMA_ID (2 LE bytes) || proto bytes. publish() enforces the
+  // 1220-byte payload cap for us.
+  std::array<uint8_t, MAX_PAYLOAD> buf;
+  if (proto_bytes.size() + 2 > MAX_PAYLOAD) {
+    ESP_LOGE(TAG, "publish_dynamic('%s'): payload %zu bytes exceeds max %zu", topic.c_str(),
+             proto_bytes.size() + 2, MAX_PAYLOAD);
+    return false;
+  }
+  buf[0] = static_cast<uint8_t>(schema_id);
+  buf[1] = static_cast<uint8_t>(schema_id >> 8);
+  std::memcpy(buf.data() + 2, proto_bytes.data(), proto_bytes.size());
+  return this->publish(topic, std::span<const uint8_t>(buf.data(), 2 + proto_bytes.size()), Encoding::PROTOBUF);
+}
+
 void MulticastPubSub::deliver_(uint32_t crc, Encoding encoding, std::span<const uint8_t> payload) {
   for (auto &sub : this->subscriptions_) {
     if (sub.crc != crc)
