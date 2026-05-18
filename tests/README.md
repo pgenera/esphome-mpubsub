@@ -18,20 +18,39 @@ pytest -q       # runs all 63 unit tests in ~3s
 | `test_wire_format.py`        | Encode/decode round-trip, validation rules (Python)             |
 | `test_wire_format_cpp.py`    | C++ encode/decode == Python reference, all reject reasons       |
 | `test_config.py`             | YAML schema accepts valid configs, rejects bad scope/port/topic |
-| `test_fuzz.py`               | Fuzz the **C++** decoder/encoder/topic-hash under AddressSanitizer + UndefinedBehaviorSanitizer with random + adversarial inputs (default 5000 per test; tune via `FUZZ_ITERS=`). |
+| `test_fuzz.py`               | Fuzz the standalone C++ wire-format / topic-hash harnesses under ASan+UBSan with random + adversarial inputs. |
+| `test_protobuf_fuzz.py`      | Fuzz the Python protobuf reference so the spec ground-truth doesn't silently accept garbage.                   |
+| `test_typed_decode_fuzz.py`  | Fuzz the **full typed-decode path** through a sanitizer-instrumented host binary -- crafted PROTOBUF packets over the actual multicast loopback. |
 
 ### Fuzzing
 
-`test_fuzz.py` targets the production C++ code, not the Python reference.
-It builds two extra binaries (`wire_format_test_san`, `topic_hash_test_san`)
-with `-fsanitize=address,undefined` and floods them with random bytes,
-mutated valid packets, adversarial size/encoding edge cases, and random
-topic strings. Any sanitizer report (out-of-bounds read, signed-overflow
-UB, alignment violation, abort) fails the test.
+Three layers of coverage:
 
-To run only the fuzz suite at higher intensity:
+* **`test_fuzz.py`** -- standalone C++ wire-format/topic-hash via the
+  `_san` harnesses (`-fsanitize=address,undefined`). Random bytes,
+  mutated valid packets, adversarial size/encoding edge cases, random
+  topic strings, valid-envelope + invalid-payload streams.
+* **`test_protobuf_fuzz.py`** -- Python protobuf reference. Pure
+  Python, fast.
+* **`test_typed_decode_fuzz.py`** -- the full codegen-emitted typed
+  decoder. Compiles `tests/typed_subscriber_san.yaml` into
+  `pubsub-typed-subscriber-san` with
+  `platformio_options.build_flags: ["-fsanitize=address,undefined"]`,
+  then sends thousands of crafted PROTOBUF packets (valid envelope +
+  matching `SCHEMA_ID` + garbage protobuf body) over the real
+  multicast loopback. After the fuzz batch, sends one known-good
+  packet and asserts the subscriber still decodes correctly --
+  catches internal-state corruption that doesn't surface as an
+  immediate sanitizer banner.
+
+Any sanitizer report (out-of-bounds read, signed-overflow UB,
+alignment violation, exit code 42 from `ASAN_OPTIONS=exitcode=42`,
+abort) fails the test.
+
+Run a layer at higher intensity:
 ```bash
 FUZZ_ITERS=50000 pytest test_fuzz.py -v
+FUZZ_ITERS=20000 pytest test_typed_decode_fuzz.py -v
 ```
 
 ## Integration tests (host platform)

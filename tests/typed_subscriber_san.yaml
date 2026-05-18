@@ -1,0 +1,46 @@
+# Sanitizer-enabled copy of typed_subscriber.yaml. Compiled with
+# AddressSanitizer + UndefinedBehaviorSanitizer, used by the typed
+# decode fuzz tests (tests/unit/test_typed_decode_fuzz.py).
+#
+# If the host platform / PlatformIO can't link with these flags, the
+# fuzz tests fall back to the regular typed_subscriber binary and
+# just watch for crashes.
+
+esphome:
+  name: pubsub-typed-subscriber-san
+  platformio_options:
+    build_flags:
+      - "-fsanitize=address,undefined"
+      - "-fno-omit-frame-pointer"
+    build_unflags:
+      - "-Os"
+      - "-O2"
+    extra_scripts: []
+
+host:
+
+logger:
+  level: VERBOSE
+
+api:
+
+external_components:
+  - source: { type: local, path: ../components }
+    components: [multicast_pubsub]
+
+multicast_pubsub:
+  id: pubsub
+  scope: link-local
+  messages:
+    - id: room_climate
+      fields:
+        - { name: temperature, type: float,  tag: 1 }
+        - { name: humidity,    type: float,  tag: 2 }
+        - { name: room_id,     type: string, tag: 3 }
+  on_message:
+    - topic: "test/climate"
+      message: room_climate
+      then:
+        - logger.log:
+            format: "typed receive: temperature=%.2f humidity=%.2f room='%s'"
+            args: ['x.temperature', 'x.humidity', 'x.room_id.c_str()']
