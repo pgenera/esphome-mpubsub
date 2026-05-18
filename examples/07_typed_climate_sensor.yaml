@@ -1,0 +1,64 @@
+# Example 7: Publish a typed RoomClimate message.
+#
+# Same physical setup as example 01 -- a DHT22 mounted somewhere --
+# but the readings travel as a typed protobuf message with named
+# fields instead of two separate raw topics. Receivers can compose
+# the fields at decode time and (importantly) the schema id will not
+# match if either side's `messages:` block drifts, so stale deploys
+# fail loudly rather than silently sending bad data.
+
+esphome:
+  name: typed-climate-sensor
+
+esp32:
+  board: esp32dev
+  framework:
+    type: esp-idf
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+
+logger:
+
+# api: is required when multicast_pubsub.messages: is non-empty --
+# we use its protobuf encoding primitives.
+api:
+
+external_components:
+  - source: { type: local, path: ../components }
+    components: [multicast_pubsub]
+
+multicast_pubsub:
+  id: pubsub
+  scope: link-local
+  messages:
+    - id: room_climate
+      fields:
+        - { name: temperature, type: float,  tag: 1 }
+        - { name: humidity,    type: float,  tag: 2 }
+        - { name: room_id,     type: string, tag: 3 }
+
+sensor:
+  - platform: dht
+    pin: GPIO15
+    model: DHT22
+    temperature:
+      id: dht_t
+      name: "Bedroom Temperature"
+    humidity:
+      id: dht_h
+      name: "Bedroom Humidity"
+      on_value:
+        # Once both readings are settled, publish them together as a
+        # single RoomClimate message. The fluent Call API is modeled
+        # after esphome::light::LightCall: chain set_<field>() calls,
+        # finish with .perform().
+        - lambda: |-
+            using esphome::multicast_pubsub::messages::RoomClimate;
+            id(pubsub)->make_call<RoomClimate>("home/bedroom/climate")
+                .set_temperature(id(dht_t).state)
+                .set_humidity(x)
+                .set_room_id("bedroom")
+                .perform();
+    update_interval: 30s

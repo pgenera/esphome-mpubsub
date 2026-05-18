@@ -14,38 +14,93 @@ This component is **complementary to** ESPHome's existing `mqtt:` component —
 both can be configured on the same device and bridged together; see
 `tests/bridge_example.yaml`.
 
-## Usage
+## Usage at a glance
+
+Two big "modes" — pick whichever fits the data:
+
+* **Raw payloads** — opaque bytes/strings. Cheapest, easiest, works
+  without any extra dependencies. Best for booleans, short ASCII
+  values, and one-shot events.
+* **Typed protobuf messages** — declare a schema once, get a generated
+  C++ struct with `encode_to` / `decode_from` and a fluent `Call`
+  builder. Best for structured records (climate readings, doorbell
+  events, anything with named fields).
+
+### Raw publish/subscribe (YAML)
 
 ```yaml
 external_components:
-  - source:
-      type: local
-      path: ../components
+  - source: { type: local, path: ../components }
     components: [multicast_pubsub]
 
 multicast_pubsub:
-  port: 18512            # default; one above the existing ESPHome udp: default (18511)
+  id: pubsub
+  port: 18512            # default; one above ESPHome udp: default (18511)
   scope: link-local      # default; safest scope, works on any flat LAN
   on_message:
     - topic: "home/vacuum/done"
       then:
-        - logger.log: "vacuum finished!"
+        - logger.log:
+            format: "received: %s"
+            args: ['std::string(x.begin(), x.end()).c_str()']
 
-sensor:
-  - platform: multicast_pubsub
-    topic: "home/livingroom/temp"
-    name: "Living Room Temperature"
-    # default mode: subscribe (publishes incoming messages as sensor state)
-```
-
-To publish, use the `multicast_pubsub.publish` action from any automation:
-
-```yaml
+# Publish from any automation
 on_...:
   - multicast_pubsub.publish:
       topic: "home/vacuum/done"
       payload: !lambda 'return "1";'
 ```
+
+### Sensor platform (auto-publish state, auto-update from received bytes)
+
+```yaml
+sensor:
+  - platform: multicast_pubsub
+    topic: "home/livingroom/temp"
+    name: "Living Room Temperature"
+    # mode: subscribe (default) | publish | both
+```
+
+### Typed messages (YAML — declare + receive)
+
+```yaml
+api:                     # required when messages: is non-empty
+
+multicast_pubsub:
+  id: pubsub
+  messages:
+    - id: room_climate
+      fields:
+        - { name: temperature, type: float,  tag: 1 }
+        - { name: humidity,    type: float,  tag: 2 }
+        - { name: room_id,     type: string, tag: 3 }
+        - { name: tags,        type: string, tag: 4, repeated: true }
+  on_message:
+    - topic: "home/garage/climate"
+      message: room_climate            # routes to the typed decoder
+      then:
+        - lambda: |-
+            ESP_LOGI("climate", "%.1fC in %s",
+                     x.temperature, x.room_id.c_str());
+```
+
+### Typed publish (C++ fluent builder, modeled on `LightCall`)
+
+```yaml
+on_value:
+  - lambda: |-
+      using esphome::multicast_pubsub::messages::RoomClimate;
+      id(pubsub)->make_call<RoomClimate>("home/garage/climate")
+          .set_temperature(x)
+          .set_humidity(id(humidity).state)
+          .set_room_id("garage")
+          .add_tags("auto")
+          .perform();
+```
+
+For everything else — schemaless `DynamicMessage` / `DynamicReader`,
+`subscribe_typed<T>`, lifecycle, error handling — see
+[`docs/CXX_API.md`](docs/CXX_API.md).
 
 ## Wire protocol (v1)
 

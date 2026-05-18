@@ -1,0 +1,68 @@
+# Example 8: Subscribe to the typed RoomClimate from example 07.
+#
+# The `message:` key on on_message routes packets through the typed
+# decoder for `room_climate`. The trigger argument `x` is the
+# decoded RoomClimate struct -- fully typed, no parsing in the
+# lambda. Stale-deploy packets (mismatched schema id) get dropped
+# silently rather than landing as garbage values.
+
+esphome:
+  name: typed-climate-display
+
+esp32:
+  board: esp32dev
+  framework:
+    type: esp-idf
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+
+logger:
+
+api:
+
+external_components:
+  - source: { type: local, path: ../components }
+    components: [multicast_pubsub]
+
+multicast_pubsub:
+  id: pubsub
+  scope: link-local
+  messages:
+    # MUST exactly match the publisher's schema (field names + types +
+    # tags). Field order doesn't matter -- SCHEMA_ID is computed over
+    # the sorted canonical form.
+    - id: room_climate
+      fields:
+        - { name: temperature, type: float,  tag: 1 }
+        - { name: humidity,    type: float,  tag: 2 }
+        - { name: room_id,     type: string, tag: 3 }
+  on_message:
+    - topic: "home/bedroom/climate"
+      message: room_climate
+      then:
+        - lambda: |-
+            ESP_LOGI("climate", "%s: %.1f C / %.0f%%",
+                     x.room_id.c_str(), x.temperature, x.humidity);
+        - homeassistant.event:
+            event: esphome.climate_update
+            data:
+              room: !lambda 'return x.room_id;'
+              temperature: !lambda 'return x.temperature;'
+              humidity: !lambda 'return x.humidity;'
+
+# Local sensor entities driven by the received fields, so the
+# typed message also shows up in HA / dashboards via a normal
+# template sensor.
+sensor:
+  - platform: template
+    id: bedroom_temp
+    name: "Bedroom Temperature (received)"
+    unit_of_measurement: "°C"
+    accuracy_decimals: 1
+  - platform: template
+    id: bedroom_hum
+    name: "Bedroom Humidity (received)"
+    unit_of_measurement: "%"
+    accuracy_decimals: 0

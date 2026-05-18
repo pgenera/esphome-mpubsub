@@ -1,0 +1,89 @@
+# Example 9: Schemaless dynamic message + MQTT bridge.
+#
+# This device sits between MQTT and the multicast pub/sub fabric.
+# When an MQTT message arrives in a particular shape, it's
+# re-encoded as a typed RoomClimate protobuf and republished on
+# the multicast group -- demonstrating both the schemaless
+# `DynamicMessage` builder and the codegen-emitted `Call` API
+# composed together.
+#
+# Use case: a legacy publisher only speaks MQTT (or HA), but
+# downstream listeners on the LAN want the typed schema.
+
+esphome:
+  name: pubsub-dynamic-bridge
+
+esp32:
+  board: esp32dev
+  framework:
+    type: esp-idf
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+
+logger:
+
+api:
+
+external_components:
+  - source: { type: local, path: ../components }
+    components: [multicast_pubsub]
+
+mqtt:
+  broker: !secret mqtt_broker
+  username: !secret mqtt_user
+  password: !secret mqtt_password
+  on_message:
+    # Legacy JSON-ish payload arrives on this topic; parse it and
+    # republish as a typed multicast packet. We deliberately use the
+    # schemaless DynamicMessage path here even though we know the
+    # schema -- it's the path you'd take when the message shape is
+    # only decided at runtime (e.g. fields conditionally included
+    # based on the incoming MQTT data).
+    - topic: "ha/bridge/climate"
+      then:
+        - lambda: |-
+            using esphome::multicast_pubsub::DynamicMessage;
+            using esphome::multicast_pubsub::messages::RoomClimate;
+
+            // Very loose parsing -- expects "temp=21.5,hum=50,room=bedroom".
+            // Real bridges should use ArduinoJson or similar.
+            float temp = 0.0f, hum = 0.0f;
+            std::string room = "?";
+            sscanf(x.c_str(), "temp=%f,hum=%f,room=%31s", &temp, &hum, room.data());
+
+            DynamicMessage m;
+            m.add_float(1, temp)
+             .add_float(2, hum)
+             .add_string(3, room);
+
+            id(pubsub)->publish_dynamic(
+                "home/bedroom/climate",
+                RoomClimate::SCHEMA_ID,
+                m.bytes());
+
+multicast_pubsub:
+  id: pubsub
+  scope: link-local
+  messages:
+    # Same schema as examples 07 / 08 so receivers can decode the
+    # bridged packets as typed RoomClimate.
+    - id: room_climate
+      fields:
+        - { name: temperature, type: float,  tag: 1 }
+        - { name: humidity,    type: float,  tag: 2 }
+        - { name: room_id,     type: string, tag: 3 }
+  on_message:
+    # Other direction: any typed climate update on the multicast
+    # fabric is forwarded back onto MQTT (so HA can ingest it).
+    - topic: "home/bedroom/climate"
+      message: room_climate
+      then:
+        - mqtt.publish:
+            topic: "ha/bridge/climate-out"
+            payload: !lambda |-
+              char buf[128];
+              snprintf(buf, sizeof(buf), "%.1f,%.0f,%s",
+                       x.temperature, x.humidity, x.room_id.c_str());
+              return std::string(buf);

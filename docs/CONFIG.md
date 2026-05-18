@@ -53,6 +53,55 @@ If `payload` is a runtime lambda we can't size-check at config time. An
 oversize payload at runtime is logged at `ERROR` level and the publish call
 silently fails (returns false in C++).
 
+For **typed** publishes (protobuf), there is no YAML action yet — use a
+lambda with the fluent C++ builder:
+
+```yaml
+on_value:
+  - lambda: |-
+      using esphome::multicast_pubsub::messages::RoomClimate;
+      id(pubsub)->make_call<RoomClimate>("home/garage/climate")
+          .set_temperature(x)
+          .set_room_id("garage")
+          .perform();
+```
+
+See [`CXX_API.md`](CXX_API.md) for the full publish surface
+(`make_call<T>`, `publish<T>`, `publish_dynamic`, `DynamicMessage`).
+
+## `multicast_pubsub:` -> `on_message:` triggers
+
+Two flavors, distinguished by whether `message:` is set:
+
+```yaml
+multicast_pubsub:
+  on_message:
+    # Raw subscribe: x is std::vector<uint8_t>
+    - topic: "home/vacuum/done"
+      then:
+        - logger.log:
+            format: "raw: %s"
+            args: ['std::string(x.begin(), x.end()).c_str()']
+
+    # Typed subscribe: x is the decoded RoomClimate struct
+    - topic: "home/garage/climate"
+      message: room_climate
+      then:
+        - lambda: |-
+            ESP_LOGI("climate", "%.1fC / %.0f%% in %s",
+                     x.temperature, x.humidity, x.room_id.c_str());
+```
+
+| Key       | Required | Type | Notes                                                                                |
+|-----------|:--------:|------|--------------------------------------------------------------------------------------|
+| `topic`   | yes      | str  | The topic to subscribe to. Same constraints as the publish action.                   |
+| `message` | no       | id   | If set, route via the typed decoder for that `messages:` entry — only matching `ENCODING == PROTOBUF` packets with the right `SCHEMA_ID` fire this trigger. If omitted, the trigger fires only for `ENCODING == RAW` packets and `x` is the raw byte vector. |
+
+A raw and a typed subscriber on the same topic can coexist as two
+separate `on_message:` entries. The runtime dispatch checks each
+packet's encoding (and schema id for typed) before invoking the right
+list of callbacks.
+
 ## `sensor:` platform: `multicast_pubsub`
 
 ```yaml
@@ -113,26 +162,45 @@ Per field:
 
 ### Type catalog
 
-| YAML type | C++ type | Wire type | Notes |
-|-----------|----------|-----------|-------|
-| `bool`    | `bool`               | varint        | |
-| `int32`   | `int32_t`            | varint        | Negative values encode as 10 bytes — use `sint32` for signed values that may be negative. |
-| `int64`   | `int64_t`            | varint        | Same caveat for negatives. |
-| `uint32`  | `uint32_t`           | varint        | |
-| `uint64`  | `uint64_t`           | varint        | |
-| `sint32`  | `int32_t`            | zigzag varint | Compact encoding for small negative numbers. |
-| `sint64`  | `int64_t`            | zigzag varint | |
-| `float`   | `float`              | fixed32       | Always 4 bytes. |
-| `string`  | `std::string`        | length-delim  | UTF-8. |
-| `bytes`   | `std::vector<uint8_t>` | length-delim | Opaque byte string. |
+| YAML type | C++ type (singular)    | C++ type (repeated)               | Wire type     | Notes |
+|-----------|------------------------|-----------------------------------|---------------|-------|
+| `bool`    | `bool`                 | `std::vector<bool>`               | varint        | |
+| `int32`   | `int32_t`              | `std::vector<int32_t>`            | varint        | Negative values encode as 10 bytes — use `sint32` for signed values that may be negative. |
+| `int64`   | `int64_t`              | `std::vector<int64_t>`            | varint        | Same caveat for negatives. |
+| `uint32`  | `uint32_t`             | `std::vector<uint32_t>`           | varint        | |
+| `uint64`  | `uint64_t`             | `std::vector<uint64_t>`           | varint        | |
+| `sint32`  | `int32_t`              | `std::vector<int32_t>`            | zigzag varint | Compact encoding for small negative numbers. |
+| `sint64`  | `int64_t`              | `std::vector<int64_t>`            | zigzag varint | |
+| `float`   | `float`                | `std::vector<float>`              | fixed32       | Always 4 bytes per element. |
+| `string`  | `std::string`          | `std::vector<std::string>`        | length-delim  | UTF-8. |
+| `bytes`   | `std::vector<uint8_t>` | `std::vector<std::vector<uint8_t>>` | length-delim | Opaque byte string. |
 
 `double` and `fixed64` are intentionally absent — ESPHome's upstream
 protobuf encoder does not implement wire type 1 (64-bit fixed) to save
 flash on 32-bit microcontrollers. Use `float` or `int64`.
 
-Nested messages are not supported in YAML schemas (deferred). The
-forthcoming `DynamicMessage` C++ API supports nesting for runtime-shaped
-messages.
+### Repeated fields
+
+Mark a field `repeated: true` to make it a list. Unpacked-encoding on the
+wire (one tag+value per element), `force=true` so zero/empty elements
+still emit. The generated `Call` builder gets `.add_X(value)`,
+`.set_X(std::vector<T>)`, `.clear_X()` setters in place of the singular
+form's `set_X` / `optional<T>` overloads. See [`CXX_API.md`](CXX_API.md)
+for the full setter table.
+
+```yaml
+multicast_pubsub:
+  messages:
+    - id: door_events
+      fields:
+        - { name: door_id, type: string, tag: 1 }
+        - { name: open_at, type: uint32, tag: 2, repeated: true }
+        - { name: tags,    type: string, tag: 3, repeated: true }
+```
+
+Nested messages are not supported in YAML schemas (deferred). For
+runtime-shaped messages with nesting, see `DynamicMessage::add_message`
+in [`CXX_API.md`](CXX_API.md).
 
 ## Topic naming rules
 

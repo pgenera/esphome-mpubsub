@@ -19,10 +19,7 @@ wifi:
 logger:
 
 external_components:
-  - source:
-      type: git
-      url: https://github.com/pgenera/esphome-multicast
-      ref: main
+  - source: { type: local, path: ../components }
     components: [multicast_pubsub]
 
 multicast_pubsub:

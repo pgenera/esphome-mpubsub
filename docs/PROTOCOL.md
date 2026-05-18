@@ -79,29 +79,68 @@ to compute it locally; the probe prints the group address as it starts.
 ```
  byte:  0    1    2    3    4    5    6    7    8    9   10   11   12 ...
        +----+----+----+----+----+----+----+----+----+----+----+----+----+
-       | 'M'| 'P'| VER| FLG|        TOPIC_CRC32         | PAY_LEN  | RSV | PAYLOAD ...
+       | 'M'| 'P'| VER| ENC|        TOPIC_CRC32         | PAY_LEN  | RSV | BODY ...
        +----+----+----+----+----+----+----+----+----+----+----+----+----+
 ```
 
-Total: **12-byte header + up to 1220 bytes payload = 1232-byte datagram.**
+Total: **12-byte header + up to 1220 bytes body = 1232-byte datagram.**
 
 | Offset | Size | Field        | Notes                                                          |
 |-------:|-----:|--------------|----------------------------------------------------------------|
 |      0 |    2 | `MAGIC`      | ASCII `"MP"` (`0x4D 0x50`)                                     |
-|      2 |    1 | `VERSION`    | `0x01` for v1                                                  |
-|      3 |    1 | `FLAGS`      | See §3.1                                                       |
+|      2 |    1 | `VERSION`    | `0x01`                                                         |
+|      3 |    1 | `ENCODING`   | Body-encoding enum (see §3.1)                                  |
 |      4 |    4 | `TOPIC_CRC32`| Little-endian CRC-32/IEEE 802.3 of the UTF-8 topic string      |
 |      8 |    2 | `PAYLOAD_LEN`| Little-endian uint16; must equal `len(datagram) - 12`          |
 |     10 |    2 | `RESERVED`   | Senders MUST write `0x00 0x00`. Receivers MUST ignore.         |
-|     12 | ≤1220| `PAYLOAD`    | Application-defined bytes                                      |
+|     12 | ≤1220| `BODY`       | Encoding-dependent (see §3.1)                                  |
 
-### 3.1 FLAGS
+### 3.1 ENCODING byte and body layout
 
-| Bit  | Mask  | Name                | Meaning                                                  |
-|-----:|:-----:|---------------------|----------------------------------------------------------|
-|    0 | 0x01  | `FLAG_TEXT`         | Payload is UTF-8 text. Informational only — receivers may use it as a hint for logging or display. |
-|    1 | 0x02  | `FLAG_RETAIN_HINT`  | Sender intends this to be a sticky-state message. **Multicast cannot truly retain** — receivers that miss the packet miss the state — but the flag is preserved for bridges (e.g. an MQTT bridge can set `retain=true`). |
-| 2..7 | 0xFC  | reserved            | Senders MUST write `0`. Receivers MUST drop packets where any reserved bit is set. |
+Byte 3 is a 1-byte enum indicating how the body should be parsed:
+
+| Value      | Name        | Body layout                                                   |
+|-----------:|-------------|---------------------------------------------------------------|
+| `0x00`     | `RAW`       | Opaque bytes. The application interprets them however it likes. |
+| `0x01`     | `PROTOBUF`  | 2-byte little-endian `SCHEMA_ID` followed by protobuf bytes.  |
+| `0x02..FF` | reserved    | Receivers MUST drop the packet. Reserved for future encodings such as compression flavors. |
+
+**`RAW` body:**
+```
+[12-byte header][opaque bytes (PAYLOAD_LEN total)]
+```
+
+**`PROTOBUF` body:**
+```
+[12-byte header][SCHEMA_ID: uint16 LE][protobuf bytes]
+```
+where `PAYLOAD_LEN = 2 + len(protobuf bytes)`.
+
+The `SCHEMA_ID` is the low 16 bits of CRC-32 over the **canonical
+schema string**: fields sorted by tag, each rendered as
+`<tag>:<type>:<name>` (no whitespace; repeated fields render as
+`<tag>:repeated <type>:<name>`), lines joined with `\n`, UTF-8.
+Two devices declaring an identical schema produce the same id;
+changing any field's name/type/tag/repeated-ness changes the id. A
+receiver MUST drop a `PROTOBUF` packet whose `SCHEMA_ID` doesn't match
+any typed subscriber on the topic.
+
+Protobuf body bytes are produced by ESPHome's
+`esphome::api::ProtoEncode` primitives (the same library the native
+API uses), so on-wire output is byte-for-byte identical to other
+protobuf implementations supporting wire types 0, 2, and 5. Wire type
+1 (64-bit fixed: `double`, `fixed64`, `sfixed64`) is **intentionally
+unsupported** — matches the upstream encoder, which omits it to save
+flash on 32-bit microcontrollers.
+
+Two ways to generate the protobuf body in firmware:
+
+* **Codegen-generated `encode_to(...)`** on each typed struct
+  (declared via YAML `messages:`).
+* **`DynamicMessage`** — fluent runtime builder for bridges and any
+  forwarder that decides field shape at runtime.
+
+Both are bit-for-bit compatible; see [`CXX_API.md`](CXX_API.md).
 
 ### 3.2 TOPIC_CRC32
 
@@ -128,13 +167,21 @@ reason) if any of the following is true:
 1. `len(datagram) < 12` — header truncated.
 2. `datagram[0..2] != b"MP"` — bad magic.
 3. `datagram[2] != 0x01` — unknown version.
-4. `(datagram[3] & 0xFC) != 0` — reserved flag bit set.
+4. `datagram[3]` is not a known encoding value (`0x00` or `0x01`) — unknown encoding.
 5. `12 + PAYLOAD_LEN != len(datagram)` — length mismatch.
 6. `TOPIC_CRC32` matches none of the topics this node has subscribed to.
 
+For `ENCODING == PROTOBUF` packets, the receiver additionally MUST
+drop the body if:
+
+7. `PAYLOAD_LEN < 2` — body too short to carry a `SCHEMA_ID`.
+8. The `SCHEMA_ID` doesn't match any typed subscriber on the topic.
+
 The C++ implementation surfaces (1)–(5) as a `DecodeError` enum
-(`TOO_SHORT`, `BAD_MAGIC`, `BAD_VERSION`, `RESERVED_FLAGS`,
-`LENGTH_MISMATCH`); see `components/multicast_pubsub/wire_format.h`.
+(`TOO_SHORT`, `BAD_MAGIC`, `BAD_VERSION`, `UNKNOWN_ENCODING`,
+`LENGTH_MISMATCH`); (6)–(8) are post-decode filtering in
+`MulticastPubSub::deliver_`. See
+`components/multicast_pubsub/wire_format.h`.
 
 ## 5. Sender requirements
 
@@ -144,8 +191,12 @@ A publisher MUST:
   `multicast_pubsub.publish:` action rejects literal payloads above that
   size at config time. The runtime rejects oversize lambda payloads at
   `publish()` time and logs an `ERROR`.
-* Reject `FLAGS` values with any bit in `0xFC` set (same rule as receivers
-  for forward compatibility).
+* Set `ENCODING` to one of the defined values (`0x00 = RAW`, `0x01 =
+  PROTOBUF`). Reserved values are forward-compat slots and MUST NOT
+  appear in current traffic.
+* For `ENCODING == PROTOBUF`, prepend the 2-byte little-endian
+  `SCHEMA_ID` before the protobuf bytes; `PAYLOAD_LEN` counts the
+  schema id plus the protobuf body.
 * Set `RESERVED` bytes (offsets 10–11) to `0x00 0x00`.
 * Use the same UDP port the subscribers are listening on (default 18512).
 * Set IPv6 multicast hop limit (`IPV6_MULTICAST_HOPS`). The component
