@@ -165,6 +165,26 @@ esphome compile tests/subscriber.yaml
 
 See `tests/README.md` for the full test catalog.
 
+## License
+
+MIT — see [`LICENSE`](LICENSE).
+
+A note on the future direction: ESPHome itself dual-licenses C++ files
+as GPLv3 and Python files as MIT. To keep the option open for an
+upstream contribution to ESPHome's core down the road, the copyright
+holder may relicense the C++ portions of this repository under GPLv3
+at that time. The currently-released MIT terms remain in effect for
+any code already distributed under them — re-licensing only applies
+to future versions.
+
+External contributors: please sign off your commits with `git commit
+-s` (DCO) so the project can redistribute your patches under any
+compatible license.
+
+The spec PDF at the repository root is published separately by the
+original author under CC BY 4.0; see the third-party notice at the
+bottom of [`LICENSE`](LICENSE).
+
 ## Limitations (v1)
 
 * IPv6 only. IPv4 / mDNS coordination is described in the spec but not yet
