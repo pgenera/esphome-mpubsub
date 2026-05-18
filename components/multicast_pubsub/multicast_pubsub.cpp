@@ -8,6 +8,50 @@
 
 #include "esphome/core/log.h"
 
+namespace esphome::multicast_pubsub {
+
+static const char *const TAG = "multicast_pubsub";
+
+}  // namespace esphome::multicast_pubsub
+
+// arduino-esp8266 ships precompiled lwip2 with LWIP_SOCKET=0, so
+// `lwip/sockets.h` exposes none of the BSD-style symbols we need
+// (IPPROTO_UDP, IPV6_JOIN_GROUP, ipv6_mreq, sockaddr_in6, ...). Until we
+// add a native lwip-netconn / WiFiUDP path for that platform, the
+// component still has to compile so users can drop it into shared YAML
+// without breaking their build. We split into a real implementation
+// (every other platform) and a no-op stub (ESP8266) below.
+#if defined(USE_ESP8266)
+
+namespace esphome::multicast_pubsub {
+
+void MulticastPubSub::setup() {
+  ESP_LOGE(TAG, "multicast_pubsub is not implemented on ESP8266: arduino-esp8266 builds lwip2 with "
+                "LWIP_SOCKET=0, so the BSD-style IPv6 multicast API isn't available. The component "
+                "is a no-op on this device.");
+  this->mark_failed();
+}
+void MulticastPubSub::loop() {}
+void MulticastPubSub::dump_config() {
+  ESP_LOGCONFIG(TAG, "Multicast Pub/Sub: (unsupported on ESP8266, no-op stub)");
+}
+Subscription *MulticastPubSub::find_subscription_(const std::string & /*topic*/) { return nullptr; }
+Subscription *MulticastPubSub::find_or_create_subscription_(const std::string & /*topic*/) { return nullptr; }
+void MulticastPubSub::subscribe(const std::string & /*topic*/, MessageCallback /*cb*/) {}
+bool MulticastPubSub::publish(const std::string & /*topic*/, std::span<const uint8_t> /*payload*/,
+                              Encoding /*encoding*/) {
+  return false;
+}
+bool MulticastPubSub::publish_dynamic(const std::string & /*topic*/, uint16_t /*schema_id*/,
+                                      std::span<const uint8_t> /*proto_bytes*/) {
+  return false;
+}
+void MulticastPubSub::deliver_(uint32_t /*crc*/, Encoding /*encoding*/, std::span<const uint8_t> /*payload*/) {}
+
+}  // namespace esphome::multicast_pubsub
+
+#else  // !USE_ESP8266 -- real implementation
+
 // Pull in the platform's `sockaddr_in6` / `ipv6_mreq` definitions. The
 // ESPHome socket abstraction takes care of selecting BSD vs LwIP sockets, but
 // the IPv6 multicast group-membership struct is the same shape on both:
@@ -20,8 +64,6 @@
 #endif
 
 namespace esphome::multicast_pubsub {
-
-static const char *const TAG = "multicast_pubsub";
 
 void MulticastPubSub::setup() {
   this->socket_ = socket::socket(AF_INET6, SOCK_DGRAM, IPPROTO_UDP);
@@ -78,7 +120,16 @@ void MulticastPubSub::loop() {
       ESP_LOGV(TAG, "drop packet: decode err %u", static_cast<unsigned>(err));
       continue;
     }
+    this->messages_received_++;
     this->deliver_(pkt.topic_crc, pkt.encoding, pkt.payload);
+  }
+  if (this->messages_sent_sensor_ != nullptr && this->messages_sent_ != this->last_published_sent_) {
+    this->messages_sent_sensor_->publish_state(static_cast<float>(this->messages_sent_));
+    this->last_published_sent_ = this->messages_sent_;
+  }
+  if (this->messages_received_sensor_ != nullptr && this->messages_received_ != this->last_published_received_) {
+    this->messages_received_sensor_->publish_state(static_cast<float>(this->messages_received_));
+    this->last_published_received_ = this->messages_received_;
   }
 }
 
@@ -174,6 +225,7 @@ bool MulticastPubSub::publish(const std::string &topic, std::span<const uint8_t>
     ESP_LOGW(TAG, "publish(%s): sendto errno %d", topic.c_str(), errno);
     return false;
   }
+  this->messages_sent_++;
   ESP_LOGV(TAG, "published %zu bytes to '%s'", payload.size(), topic.c_str());
   return true;
 }
@@ -226,5 +278,7 @@ void MulticastPubSub::deliver_(uint32_t crc, Encoding encoding, std::span<const 
 }
 
 }  // namespace esphome::multicast_pubsub
+
+#endif  // !USE_ESP8266
 
 #endif  // USE_NETWORK

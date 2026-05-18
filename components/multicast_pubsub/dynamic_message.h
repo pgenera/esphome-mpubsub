@@ -13,6 +13,7 @@
 
 #include "esphome/core/defines.h"
 #ifdef USE_NETWORK
+#ifdef USE_API
 
 #include <cstddef>
 #include <cstdint>
@@ -131,4 +132,5 @@ class DynamicReader {
 
 }  // namespace esphome::multicast_pubsub
 
+#endif  // USE_API
 #endif  // USE_NETWORK

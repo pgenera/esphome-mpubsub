@@ -5,19 +5,26 @@ See ../../README.md for the protocol specification.
 
 from esphome import automation
 import esphome.codegen as cg
+from esphome.components import sensor as esphome_sensor
 import esphome.config_validation as cv
 from esphome.const import (
+    CONF_ACCURACY_DECIMALS,
+    CONF_ENTITY_CATEGORY,
     CONF_ID,
+    CONF_INTERNAL,
     CONF_NAME,
     CONF_PAYLOAD,
     CONF_PORT,
+    CONF_STATE_CLASS,
     CONF_TOPIC,
     CONF_TRIGGER_ID,
     CONF_TYPE,
+    ENTITY_CATEGORY_DIAGNOSTIC,
+    STATE_CLASS_TOTAL_INCREASING,
 )
 
 from esphome import final_validate as fv
-from esphome.core import CORE
+from esphome.core import CORE, ID
 
 from . import proto_emitter
 
@@ -34,7 +41,7 @@ DEPENDENCIES = ["network"]
 # ~10KB cost of the API server. (A future upstream refactor splitting
 # api/proto.{h,cpp} into a leaf `api_proto` sub-component would let us
 # bring in only the protobuf primitives without the server runtime.)
-AUTO_LOAD = ["socket"]
+AUTO_LOAD = ["socket", "sensor"]
 MULTI_CONF = True
 
 multicast_pubsub_ns = cg.esphome_ns.namespace("multicast_pubsub")
@@ -320,6 +327,30 @@ async def to_code(config):
     cg.add(var.set_port(config[CONF_PORT]))
     cg.add(var.set_scope(config[CONF_SCOPE]))
     cg.add(var.set_hops(config[CONF_HOPS]))
+
+    # Auto-create internal diagnostic sensors for messages sent / received.
+    # These are picked up automatically by any platform that iterates
+    # registered sensors (prometheus, web_server, HA API, ...). Marked
+    # internal: True so they don't clutter Home Assistant entity lists
+    # unless the user explicitly wants them.
+    parent_slug = str(config[CONF_ID].id)
+    for slug, setter in (
+        ("messages_sent", "set_messages_sent_sensor"),
+        ("messages_received", "set_messages_received_sensor"),
+    ):
+        s_id = ID(f"{parent_slug}_{slug}", is_declaration=True, type=esphome_sensor.Sensor)
+        s_config = esphome_sensor.sensor_schema(esphome_sensor.Sensor)(
+            {
+                CONF_ID: s_id,
+                CONF_NAME: slug.replace("_", " "),
+                CONF_INTERNAL: True,
+                CONF_ACCURACY_DECIMALS: 0,
+                CONF_STATE_CLASS: STATE_CLASS_TOTAL_INCREASING,
+                CONF_ENTITY_CATEGORY: ENTITY_CATEGORY_DIAGNOSTIC,
+            }
+        )
+        s_var = await esphome_sensor.new_sensor(s_config)
+        cg.add(getattr(var, setter)(s_var))
 
     for conf in config.get(CONF_ON_MESSAGE, []):
         if CONF_MESSAGE in conf:

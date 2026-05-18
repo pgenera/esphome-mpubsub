@@ -1,6 +1,11 @@
 #include "dynamic_message.h"
 
 #ifdef USE_NETWORK
+// Schemaless protobuf encode/decode is layered on top of the api component's
+// protobuf primitives (`esphome/components/api/proto.h`). When the user
+// hasn't loaded the api component (raw publish/subscribe only), the rest of
+// this file would fail to compile -- skip it.
+#ifdef USE_API
 
 #include <cstring>
 
@@ -275,4 +280,5 @@ bool DynamicReader::Field::as_message(DynamicReader *out) const {
 
 }  // namespace esphome::multicast_pubsub
 
+#endif  // USE_API
 #endif  // USE_NETWORK

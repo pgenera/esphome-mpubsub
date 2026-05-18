@@ -1,0 +1,40 @@
+# Example 10 (ESP8266): Drop-in skeleton for an ESP8266 publisher.
+#
+# IMPORTANT: arduino-esp8266 ships precompiled lwip2 with `LWIP_SOCKET=0`,
+# which leaves the BSD-style IPv6 multicast API (`IPPROTO_UDP`,
+# `IPV6_JOIN_GROUP`, `ipv6_mreq`, `sockaddr_in6`, ...) unavailable. The
+# component compiles on ESP8266 — so you can include it in shared YAML
+# without breaking the build — but it is a runtime no-op: `setup()`
+# logs an error and marks the component failed. Use ESP32 (or `host:`)
+# if you actually need multicast pub/sub to work.
+
+esphome:
+  name: pubsub-esp8266-publisher
+
+esp8266:
+  board: nodemcuv2
+
+# multicast_pubsub speaks IPv6; on ESP8266 this also selects the
+# lwip2_ipv6 framework variant.
+network:
+  enable_ipv6: true
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+
+logger:
+
+external_components:
+  - source: { type: local, path: ../components }
+    components: [multicast_pubsub]
+
+multicast_pubsub:
+  scope: link-local
+
+interval:
+  - interval: 5s
+    then:
+      - multicast_pubsub.publish:
+          topic: "home/heartbeat"
+          payload: "tick"

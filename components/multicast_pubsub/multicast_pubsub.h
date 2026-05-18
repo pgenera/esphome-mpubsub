@@ -10,6 +10,7 @@
 #include <string>
 #include <vector>
 
+#include "esphome/components/sensor/sensor.h"
 #include "esphome/components/socket/socket.h"
 #include "esphome/core/component.h"
 #include "esphome/core/helpers.h"
@@ -120,6 +121,11 @@ class MulticastPubSub : public Component {
     return typename T::Call(this, topic);
   }
 
+  // Diagnostic sensors auto-created by codegen. Picked up by any platform that
+  // iterates registered sensors (prometheus, web_server, HA API, etc).
+  void set_messages_sent_sensor(sensor::Sensor *s) { this->messages_sent_sensor_ = s; }
+  void set_messages_received_sensor(sensor::Sensor *s) { this->messages_received_sensor_ = s; }
+
  protected:
   void deliver_(uint32_t crc, Encoding encoding, std::span<const uint8_t> payload);
   Subscription *find_subscription_(const std::string &topic);
@@ -133,6 +139,16 @@ class MulticastPubSub : public Component {
 
   std::unique_ptr<socket::Socket> socket_{};
   std::vector<Subscription> subscriptions_{};
+
+  sensor::Sensor *messages_sent_sensor_{nullptr};
+  sensor::Sensor *messages_received_sensor_{nullptr};
+  uint32_t messages_sent_{0};
+  uint32_t messages_received_{0};
+  // Last value published to the sensors -- compared each loop() to avoid
+  // republishing identical readings (publish_state() is otherwise quite
+  // chatty: triggers filters, MQTT, prometheus state churn, ...).
+  uint32_t last_published_sent_{UINT32_MAX};
+  uint32_t last_published_received_{UINT32_MAX};
 };
 
 }  // namespace esphome::multicast_pubsub
