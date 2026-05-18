@@ -11,7 +11,6 @@ from esphome.const import (
     CONF_ACCURACY_DECIMALS,
     CONF_ENTITY_CATEGORY,
     CONF_ID,
-    CONF_INTERNAL,
     CONF_NAME,
     CONF_PAYLOAD,
     CONF_PORT,
@@ -328,11 +327,13 @@ async def to_code(config):
     cg.add(var.set_scope(config[CONF_SCOPE]))
     cg.add(var.set_hops(config[CONF_HOPS]))
 
-    # Auto-create internal diagnostic sensors for messages sent / received.
-    # These are picked up automatically by any platform that iterates
-    # registered sensors (prometheus, web_server, HA API, ...). Marked
-    # internal: True so they don't clutter Home Assistant entity lists
-    # unless the user explicitly wants them.
+    # Auto-create diagnostic sensors for messages sent / received. Picked
+    # up automatically by anything that iterates registered sensors
+    # (prometheus, web_server, the HA API, ...). entity_category:
+    # diagnostic puts them in HA's "Diagnostic" section so they don't
+    # clutter the main entity list, but we deliberately don't mark them
+    # `internal: True` -- the prometheus component skips internal
+    # entities by default, which would defeat the whole point.
     parent_slug = str(config[CONF_ID].id)
     for slug, setter in (
         ("messages_sent", "set_messages_sent_sensor"),
@@ -343,7 +344,6 @@ async def to_code(config):
             {
                 CONF_ID: s_id,
                 CONF_NAME: slug.replace("_", " "),
-                CONF_INTERNAL: True,
                 CONF_ACCURACY_DECIMALS: 0,
                 CONF_STATE_CLASS: STATE_CLASS_TOTAL_INCREASING,
                 CONF_ENTITY_CATEGORY: ENTITY_CATEGORY_DIAGNOSTIC,
