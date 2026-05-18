@@ -5,14 +5,20 @@ YAML:
       - platform: multicast_pubsub
         topic: "home/livingroom/temp"
         name: "Living Room Temperature"
-        mode: subscribe          # subscribe | publish | both (default: subscribe)
+        mode: subscribe          # subscribe (default) | publish
         # standard sensor.sensor_schema knobs (unit, accuracy_decimals, ...)
         # apply as usual.
 
 For subscribers, incoming payloads are parsed as an ASCII float and the
 sensor's state is updated. For publishers, the sensor's `add_on_state_callback`
-is hooked and each state change is sent as `"%.6f"` (configurable via
-``accuracy_decimals``) to the topic.
+is hooked and each state change is sent as ASCII to the topic.
+
+A `both` mode used to be supported but was removed: combining publish
+and subscribe on the *same topic* is semantically incoherent (a sensor
+is a single state slot) and creates a feedback loop via
+IPV6_MULTICAST_LOOP. If you want bidirectional flow, use two distinct
+topics (the MQTT `set/...` + `state/...` pattern) wired through
+automations.
 """
 
 import esphome.codegen as cg
@@ -33,8 +39,7 @@ CONF_PARENT_ID = "multicast_pubsub_id"
 
 MODE_SUBSCRIBE = "subscribe"
 MODE_PUBLISH = "publish"
-MODE_BOTH = "both"
-MODES = [MODE_SUBSCRIBE, MODE_PUBLISH, MODE_BOTH]
+MODES = [MODE_SUBSCRIBE, MODE_PUBLISH]
 
 MulticastSensor = multicast_pubsub_ns.class_(
     "MulticastSensor", sensor.Sensor, cg.Component
@@ -60,5 +65,5 @@ async def to_code(config):
     cg.add(var.set_parent(parent))
     cg.add(var.set_topic(config[CONF_TOPIC]))
     mode = config[CONF_MODE]
-    cg.add(var.set_subscribe(mode in (MODE_SUBSCRIBE, MODE_BOTH)))
-    cg.add(var.set_publish(mode in (MODE_PUBLISH, MODE_BOTH)))
+    cg.add(var.set_subscribe(mode == MODE_SUBSCRIBE))
+    cg.add(var.set_publish(mode == MODE_PUBLISH))

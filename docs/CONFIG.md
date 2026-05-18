@@ -135,7 +135,7 @@ sensor:
     multicast_pubsub_id: my_pubsub   # optional
     topic: "home/livingroom/temp"
     name: "Living Room Temperature"
-    mode: subscribe                  # subscribe | publish | both
+    mode: subscribe                  # subscribe | publish
     # plus any standard sensor schema knobs
     unit_of_measurement: "°C"
     accuracy_decimals: 1
@@ -147,7 +147,7 @@ sensor:
 |-----------------------|:--------:|--------|-------------|------------------------------------------------------------------|
 | `multicast_pubsub_id` | no       | id     | auto        | Which `multicast_pubsub:` instance to attach to.                 |
 | `topic`               | yes      | str    | —           | Topic name, same constraints as the action.                      |
-| `mode`                | no       | enum   | `subscribe` | `subscribe` (decode payload as float → sensor state) / `publish` (sensor state → ASCII float on the wire) / `both`. |
+| `mode`                | no       | enum   | `subscribe` | `subscribe` (decode payload as float → sensor state) / `publish` (sensor state → ASCII float on the wire). |
 
 All other keys come from the standard ESPHome
 [`sensor.sensor_schema`](https://esphome.io/components/sensor/) — units,

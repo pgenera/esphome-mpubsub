@@ -216,6 +216,25 @@ def test_rejects_publish_with_message_but_no_values(tmp_path: Path) -> None:
     assert "values" in (r.stdout + r.stderr).lower()
 
 
+def test_rejects_sensor_mode_both(tmp_path: Path) -> None:
+    """`mode: both` was removed because same-topic bidirectional flow
+    creates an infinite loop via IPV6_MULTICAST_LOOP. Use two distinct
+    topics or split publishes and subscribes across devices."""
+    body = (
+        "multicast_pubsub:\n"
+        "  id: pubsub\n"
+        "sensor:\n"
+        "  - platform: multicast_pubsub\n"
+        "    topic: \"loop/test\"\n"
+        "    name: \"Loop Test\"\n"
+        "    mode: both\n"
+    )
+    r = _esphome_config(_wrap(body), tmp_path)
+    assert r.returncode != 0
+    combined = (r.stdout + r.stderr).lower()
+    assert "both" in combined or "must be one of" in combined, combined
+
+
 def test_accepts_publish_typed_in_automation(tmp_path: Path) -> None:
     body = (
         "multicast_pubsub:\n"

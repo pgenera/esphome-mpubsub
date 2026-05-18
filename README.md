@@ -58,7 +58,7 @@ sensor:
   - platform: multicast_pubsub
     topic: "home/livingroom/temp"
     name: "Living Room Temperature"
-    # mode: subscribe (default) | publish | both
+    # mode: subscribe (default) | publish
 ```
 
 ### Typed messages (YAML — declare + receive)
