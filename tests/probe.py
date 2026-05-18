@@ -74,6 +74,11 @@ SCOPES = {
 def _load_schemas(path: Path) -> dict[int, dict]:
     """Read a YAML file's ``multicast_pubsub.messages:`` block and return
     a mapping from SCHEMA_ID to a dict of ``{id, fields: [{name,type,tag,repeated}]}``.
+
+    ESPHome configs use custom YAML tags (``!lambda``, ``!secret``,
+    ``!include``) that PyYAML's safe loader doesn't know about. Register
+    loose constructors that coerce them to opaque strings -- we never
+    inspect those values, we only need the messages: section.
     """
     try:
         import yaml  # type: ignore[import-not-found]
@@ -81,7 +86,22 @@ def _load_schemas(path: Path) -> dict[int, dict]:
         raise SystemExit(
             "probe.py needs PyYAML for --schema; install via `pip install pyyaml`"
         ) from e
-    raw = yaml.safe_load(path.read_text())
+
+    class _TolerantLoader(yaml.SafeLoader):
+        pass
+
+    def _ignore_tag(loader, tag_suffix, node):
+        if isinstance(node, yaml.ScalarNode):
+            return loader.construct_scalar(node)
+        if isinstance(node, yaml.SequenceNode):
+            return loader.construct_sequence(node)
+        return loader.construct_mapping(node)
+
+    # Match every custom ESPHome tag (and anything else unknown).
+    _TolerantLoader.add_multi_constructor("!", _ignore_tag)
+    _TolerantLoader.add_multi_constructor("tag:", _ignore_tag)
+
+    raw = yaml.load(path.read_text(), Loader=_TolerantLoader)
     if not isinstance(raw, dict):
         raise SystemExit(f"{path}: top level is not a YAML mapping")
     section = raw.get("multicast_pubsub", {})

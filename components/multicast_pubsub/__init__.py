@@ -17,8 +17,15 @@ from esphome.const import (
 )
 
 from esphome import final_validate as fv
+from esphome.core import CORE
 
 from . import proto_emitter
+
+# Slot in CORE.data where we cache the declared `messages:` entries so the
+# typed publish action's codegen (which runs after the component's to_code
+# but doesn't have access to fv.full_config) can look up each schema's
+# field shape.
+_SCHEMA_REGISTRY_KEY = "multicast_pubsub_schemas"
 
 CODEOWNERS = ["@pgenera"]
 DEPENDENCIES = ["network"]
@@ -44,6 +51,7 @@ CONF_FIELDS = "fields"
 CONF_TAG = "tag"
 CONF_MESSAGE = "message"
 CONF_REPEATED = "repeated"
+CONF_VALUES = "values"
 
 SCOPES = {
     "link-local": Scope.LINK_LOCAL,
@@ -263,6 +271,20 @@ def _final_validate(config):
     return config
 
 
+def _register_schema(msg_cfg: dict) -> None:
+    """Stash a message schema in CORE.data so the typed publish action's
+    codegen can look it up later. Idempotent -- last write wins, which is
+    fine because messages: ids are unique per component instance and
+    duplicates across instances would have to declare identical shapes
+    to compute the same SCHEMA_ID anyway."""
+    CORE.data.setdefault(_SCHEMA_REGISTRY_KEY, {})[msg_cfg[CONF_ID]] = msg_cfg
+
+
+def _lookup_message_schema(msg_id: str) -> dict | None:
+    """Return the messages: entry matching ``msg_id``, or None."""
+    return CORE.data.get(_SCHEMA_REGISTRY_KEY, {}).get(msg_id)
+
+
 FINAL_VALIDATE_SCHEMA = _final_validate
 
 
@@ -278,6 +300,7 @@ async def to_code(config):
             'struct multicast_pubsub_force_proto_include_'
         ))
     for msg_cfg in config.get(CONF_MESSAGES, []):
+        _register_schema(msg_cfg)
         msg = proto_emitter.Message(
             id=msg_cfg[CONF_ID],
             fields=tuple(
@@ -324,13 +347,57 @@ async def to_code(config):
             )
 
 
-PUBLISH_ACTION_SCHEMA = cv.Schema(
-    {
-        cv.GenerateID(): cv.use_id(MulticastPubSub),
-        cv.Required(CONF_TOPIC): cv.templatable(_topic_validator),
-        cv.Required(CONF_PAYLOAD): cv.templatable(_static_payload_validator),
-    }
+def _publish_action_mode_validator(config: dict) -> dict:
+    """Enforce that a multicast_pubsub.publish action is either raw
+    (`payload:` only) or typed (`message:` + `values:`), never both
+    and never neither.
+    """
+    has_payload = CONF_PAYLOAD in config
+    has_message = CONF_MESSAGE in config
+    if has_payload and has_message:
+        raise cv.Invalid(
+            "multicast_pubsub.publish: `payload:` and `message:` are mutually "
+            "exclusive -- pick one. Use `payload:` for opaque bytes, or "
+            "`message: + values:` for a typed protobuf message."
+        )
+    if not has_payload and not has_message:
+        raise cv.Invalid(
+            "multicast_pubsub.publish requires either `payload:` (raw mode) "
+            "or `message: + values:` (typed mode)."
+        )
+    if has_message and CONF_VALUES not in config:
+        raise cv.Invalid(
+            "multicast_pubsub.publish with `message:` requires a `values:` "
+            "mapping (use `values: {}` to publish a fully-default message)."
+        )
+    return config
+
+
+PUBLISH_ACTION_SCHEMA = cv.All(
+    cv.Schema(
+        {
+            cv.GenerateID(): cv.use_id(MulticastPubSub),
+            cv.Required(CONF_TOPIC): cv.templatable(_topic_validator),
+            cv.Optional(CONF_PAYLOAD): cv.templatable(_static_payload_validator),
+            cv.Optional(CONF_MESSAGE): _message_id_validator,
+            # Values are validated lazily -- per-field type-coercion happens
+            # at codegen time when we know which message they belong to.
+            cv.Optional(CONF_VALUES): cv.Schema({cv.string_strict: cv.valid}),
+        }
+    ),
+    _publish_action_mode_validator,
 )
+
+
+def _publish_action_class(msg_id: str):
+    """Return a MockObjClass for the codegen-emitted Publish<Msg>Action.
+
+    The actual C++ class lives in the generated namespace (emitted by
+    proto_emitter.emit_struct), so this is just a Python handle we hand
+    to cg.declare_id / cg.new_Pvariable.
+    """
+    class_name = f"Publish{proto_emitter.pascal_case(msg_id)}Action"
+    return multicast_pubsub_ns.class_(class_name, automation.Action)
 
 
 @automation.register_action(
@@ -341,9 +408,78 @@ PUBLISH_ACTION_SCHEMA = cv.Schema(
 )
 async def publish_action_to_code(config, action_id, template_arg, args):
     parent = await cg.get_variable(config[CONF_ID])
-    var = cg.new_Pvariable(action_id, template_arg, parent)
+
+    if CONF_PAYLOAD in config:
+        # Raw publish path (existing behavior).
+        var = cg.new_Pvariable(action_id, template_arg, parent)
+        topic_tpl = await cg.templatable(config[CONF_TOPIC], args, cg.std_string)
+        cg.add(var.set_topic(topic_tpl))
+        payload_tpl = await cg.templatable(
+            config[CONF_PAYLOAD], args, cg.std_string
+        )
+        cg.add(var.set_payload(payload_tpl))
+        return var
+
+    # Typed publish path -- rewrite the action_id to point at the
+    # codegen-emitted Publish<Msg>Action class (declared in main.cpp via
+    # cg.add_global in to_code() above), then call its per-field
+    # templatable setters.
+    msg_id = config[CONF_MESSAGE]
+    schema = _lookup_message_schema(msg_id)
+    if schema is None:
+        raise cv.Invalid(
+            f"multicast_pubsub.publish references unknown message {msg_id!r}. "
+            f"Declare it under `multicast_pubsub.messages:` or pick a "
+            f"different message id.",
+            path=[CONF_MESSAGE],
+        )
+
+    field_types = {
+        f[CONF_NAME]: (f[CONF_TYPE], f[CONF_REPEATED]) for f in schema[CONF_FIELDS]
+    }
+    for field_name in config.get(CONF_VALUES, {}):
+        if field_name not in field_types:
+            raise cv.Invalid(
+                f"unknown field {field_name!r} in `values:` for message "
+                f"{msg_id!r}. Declared fields: {sorted(field_types)}",
+                path=[CONF_VALUES, field_name],
+            )
+
+    action_cls = _publish_action_class(msg_id)
+    action_id.type = action_cls
+    var = cg.new_Pvariable(action_id, template_arg)
+    cg.add(var.set_parent(parent))
+
     topic_tpl = await cg.templatable(config[CONF_TOPIC], args, cg.std_string)
     cg.add(var.set_topic(topic_tpl))
-    payload_tpl = await cg.templatable(config[CONF_PAYLOAD], args, cg.std_string)
-    cg.add(var.set_payload(payload_tpl))
+
+    for field_name, raw_value in config.get(CONF_VALUES, {}).items():
+        type_name, repeated = field_types[field_name]
+        cpp_value_type = _cpp_value_type(type_name, repeated)
+        tpl = await cg.templatable(raw_value, args, cpp_value_type)
+        cg.add(getattr(var, f"set_{field_name}")(tpl))
+
     return var
+
+
+def _cpp_value_type(type_name: str, repeated: bool):
+    """Map a YAML field type to the C++ type used by the action's
+    TEMPLATABLE_VALUE setter."""
+    base_lookup = {
+        "bool": cg.bool_,
+        "int32": cg.int32,
+        "int64": cg.int64,
+        "uint32": cg.uint32,
+        "uint64": cg.uint64,
+        "sint32": cg.int32,
+        "sint64": cg.int64,
+        "float": cg.float_,
+        "string": cg.std_string,
+        "bytes": cg.std_vector.template(cg.uint8),
+    }
+    base = base_lookup[type_name]
+    if repeated:
+        return cg.std_vector.template(base)
+    return base
+
+

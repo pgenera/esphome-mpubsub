@@ -235,14 +235,14 @@ DynamicReader as_message(DynamicReader *);   // embedded message
 
 ## YAML ↔ C++ correspondence (cheat sheet)
 
-| Operation                  | YAML                                                                            | C++ (in a `!lambda`)                                                |
-|----------------------------|---------------------------------------------------------------------------------|---------------------------------------------------------------------|
-| Publish raw                | `multicast_pubsub.publish: { topic, payload }`                                  | `id(pubsub)->publish(topic, payload)`                               |
-| Publish typed              | *(not yet — use a lambda)*                                                      | `id(pubsub)->make_call<T>(topic).set_X(v).perform()`                |
-| Publish dynamic            | *(not yet — use a lambda)*                                                      | `id(pubsub)->publish_dynamic(topic, schema_id, bytes)`              |
-| Subscribe raw              | `on_message: { topic, then: ... }` (`x` is `std::vector<uint8_t>`)              | `id(pubsub)->subscribe(topic, [](span) { ... })`                    |
-| Subscribe typed            | `on_message: { topic, message: <id>, then: ... }` (`x` is the struct)           | `id(pubsub)->subscribe_typed<T>(topic, [](const T &m) { ... })`     |
-| Sensor publish/subscribe   | `sensor: [{ platform: multicast_pubsub, topic, mode }]`                         | n/a (use the sensor platform from YAML)                             |
+| Operation                  | YAML                                                                              | C++ (in a `!lambda`)                                                |
+|----------------------------|-----------------------------------------------------------------------------------|---------------------------------------------------------------------|
+| Publish raw                | `multicast_pubsub.publish: { topic, payload }`                                    | `id(pubsub)->publish(topic, payload)`                               |
+| Publish typed              | `multicast_pubsub.publish: { topic, message: <id>, values: { ... } }`             | `id(pubsub)->make_call<T>(topic).set_X(v).perform()`                |
+| Publish dynamic            | *(not exposed in YAML — schemaless by nature)*                                    | `id(pubsub)->publish_dynamic(topic, schema_id, bytes)`              |
+| Subscribe raw              | `on_message: { topic, then: ... }` (`x` is `std::vector<uint8_t>`)                | `id(pubsub)->subscribe(topic, [](span) { ... })`                    |
+| Subscribe typed            | `on_message: { topic, message: <id>, then: ... }` (`x` is the struct)             | `id(pubsub)->subscribe_typed<T>(topic, [](const T &m) { ... })`     |
+| Sensor publish/subscribe   | `sensor: [{ platform: multicast_pubsub, topic, mode }]`                           | n/a (use the sensor platform from YAML)                             |
 
 ## Error handling
 

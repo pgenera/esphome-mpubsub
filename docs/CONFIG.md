@@ -53,21 +53,46 @@ If `payload` is a runtime lambda we can't size-check at config time. An
 oversize payload at runtime is logged at `ERROR` level and the publish call
 silently fails (returns false in C++).
 
-For **typed** publishes (protobuf), there is no YAML action yet — use a
-lambda with the fluent C++ builder:
+For **typed** publishes (protobuf), use `message:` + `values:`. The
+two forms are mutually exclusive — pick one per action.
 
 ```yaml
 on_value:
-  - lambda: |-
-      using esphome::multicast_pubsub::messages::RoomClimate;
-      id(pubsub)->make_call<RoomClimate>("home/garage/climate")
-          .set_temperature(x)
-          .set_room_id("garage")
-          .perform();
+  - multicast_pubsub.publish:
+      topic: "home/garage/climate"
+      message: room_climate           # references multicast_pubsub.messages:
+      values:
+        temperature: !lambda 'return x;'
+        humidity: !lambda 'return id(humidity).state;'
+        room_id: "garage"
 ```
 
-See [`CXX_API.md`](CXX_API.md) for the full publish surface
-(`make_call<T>`, `publish<T>`, `publish_dynamic`, `DynamicMessage`).
+| Key       | Required | Type                          | Notes                                                                                              |
+|-----------|:--------:|-------------------------------|----------------------------------------------------------------------------------------------------|
+| `message` | yes      | id                            | A messages: entry id declared on a `multicast_pubsub:` instance in the same config.                |
+| `values`  | yes      | mapping `field → templatable` | One entry per field. Missing fields default to zero/empty. Unknown field names fail config-validation. |
+
+Per-field value forms:
+
+* **Scalar fields** (`bool`, `int*`, `uint*`, `sint*`, `float`): a
+  templatable of the C++ type — literal (`42`, `"garage"`, `true`)
+  or `!lambda` returning the value.
+* **String fields**: a templatable `std::string`.
+* **Bytes fields**: a templatable `std::vector<uint8_t>`.
+* **Repeated fields**: a single templatable returning the whole
+  vector. Build it in the lambda body if you need conditional or
+  variable-length contents:
+  ```yaml
+  values:
+    open_at: !lambda |-
+      uint32_t now = millis() / 1000;
+      return std::vector<uint32_t>{now, now - 30};
+    tags: !lambda 'return std::vector<std::string>{"button", "auto"};'
+  ```
+
+For everything beyond what the YAML form covers (nested dynamic
+messages, schemaless `DynamicMessage`, the underlying `publish<T>`
+template, `make_call<T>`, etc.) see [`CXX_API.md`](CXX_API.md).
 
 ## `multicast_pubsub:` -> `on_message:` triggers
 

@@ -147,6 +147,102 @@ def test_accepts_max_size_static_payload(tmp_path: Path) -> None:
     assert "Configuration is valid" in (r.stdout + r.stderr), r.stdout + r.stderr
 
 
+def test_rejects_publish_with_both_payload_and_message(tmp_path: Path) -> None:
+    body = (
+        "multicast_pubsub:\n"
+        "  id: pubsub\n"
+        "  messages:\n"
+        "    - id: m\n"
+        "      fields:\n"
+        "        - { name: v, type: int32, tag: 1 }\n"
+        "api:\n"
+        "sensor:\n"
+        "  - platform: template\n"
+        "    id: src\n"
+        "    lambda: 'return 1.0;'\n"
+        "    update_interval: never\n"
+        "    on_value:\n"
+        "      - multicast_pubsub.publish:\n"
+        "          topic: \"t\"\n"
+        "          payload: \"x\"\n"
+        "          message: m\n"
+        "          values: { v: 1 }\n"
+    )
+    r = _esphome_config(_wrap(body), tmp_path)
+    assert r.returncode != 0
+    assert "mutually exclusive" in (r.stdout + r.stderr).lower(), r.stdout + r.stderr
+
+
+def test_rejects_publish_with_neither_payload_nor_message(tmp_path: Path) -> None:
+    body = (
+        "multicast_pubsub:\n"
+        "  id: pubsub\n"
+        "sensor:\n"
+        "  - platform: template\n"
+        "    id: src\n"
+        "    lambda: 'return 1.0;'\n"
+        "    update_interval: never\n"
+        "    on_value:\n"
+        "      - multicast_pubsub.publish:\n"
+        "          topic: \"t\"\n"
+    )
+    r = _esphome_config(_wrap(body), tmp_path)
+    assert r.returncode != 0
+    combined = (r.stdout + r.stderr).lower()
+    assert "requires either" in combined or "payload" in combined, combined
+
+
+def test_rejects_publish_with_message_but_no_values(tmp_path: Path) -> None:
+    body = (
+        "multicast_pubsub:\n"
+        "  id: pubsub\n"
+        "  messages:\n"
+        "    - id: m\n"
+        "      fields:\n"
+        "        - { name: v, type: int32, tag: 1 }\n"
+        "api:\n"
+        "sensor:\n"
+        "  - platform: template\n"
+        "    id: src\n"
+        "    lambda: 'return 1.0;'\n"
+        "    update_interval: never\n"
+        "    on_value:\n"
+        "      - multicast_pubsub.publish:\n"
+        "          topic: \"t\"\n"
+        "          message: m\n"
+    )
+    r = _esphome_config(_wrap(body), tmp_path)
+    assert r.returncode != 0
+    assert "values" in (r.stdout + r.stderr).lower()
+
+
+def test_accepts_publish_typed_in_automation(tmp_path: Path) -> None:
+    body = (
+        "multicast_pubsub:\n"
+        "  id: pubsub\n"
+        "  messages:\n"
+        "    - id: room_climate\n"
+        "      fields:\n"
+        "        - { name: temperature, type: float,  tag: 1 }\n"
+        "        - { name: room_id,     type: string, tag: 2 }\n"
+        "api:\n"
+        "sensor:\n"
+        "  - platform: template\n"
+        "    id: src\n"
+        "    lambda: 'return 1.0;'\n"
+        "    update_interval: never\n"
+        "    on_value:\n"
+        "      - multicast_pubsub.publish:\n"
+        "          topic: \"home/climate\"\n"
+        "          message: room_climate\n"
+        "          values:\n"
+        "            temperature: !lambda 'return x;'\n"
+        "            room_id: \"garage\"\n"
+    )
+    r = _esphome_config(_wrap(body), tmp_path)
+    assert "Configuration is valid" in (r.stdout + r.stderr), r.stdout + r.stderr
+
+
 def test_accepts_publish_action_in_automation(tmp_path: Path) -> None:
     body = textwrap.dedent(
         """\

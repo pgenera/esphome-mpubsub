@@ -51,14 +51,14 @@ sensor:
       name: "Bedroom Humidity"
       on_value:
         # Once both readings are settled, publish them together as a
-        # single RoomClimate message. The fluent Call API is modeled
-        # after esphome::light::LightCall: chain set_<field>() calls,
-        # finish with .perform().
-        - lambda: |-
-            using esphome::multicast_pubsub::messages::RoomClimate;
-            id(pubsub)->make_call<RoomClimate>("home/bedroom/climate")
-                .set_temperature(id(dht_t).state)
-                .set_humidity(x)
-                .set_room_id("bedroom")
-                .perform();
+        # single RoomClimate message. The YAML sugar generates a
+        # PublishRoomClimateAction at codegen time and wires each
+        # `values:` entry as a TEMPLATABLE_VALUE setter.
+        - multicast_pubsub.publish:
+            topic: "home/bedroom/climate"
+            message: room_climate
+            values:
+              temperature: !lambda 'return id(dht_t).state;'
+              humidity:    !lambda 'return x;'
+              room_id:     "bedroom"
     update_interval: 30s

@@ -345,6 +345,34 @@ def _emit_call_setters(msg: Message, struct_name: str) -> str:
     return "\n".join(lines)
 
 
+def _action_value_type(f: Field) -> str:
+    """The C++ type a Publish<Msg>Action's TEMPLATABLE_VALUE uses for a field.
+
+    For repeated fields we expose the whole std::vector<T> as one templatable
+    so users pass a single lambda returning the full list. This keeps the
+    YAML schema simple at the cost of dynamic-length flexibility (which
+    the lambda body can still do).
+    """
+    info = TYPE_INFO[f.type]
+    if f.repeated:
+        return f"std::vector<{info['cpp']}>"
+    return info["cpp"]
+
+
+def _emit_action_setters(msg: Message) -> str:
+    return "\n".join(
+        f"  TEMPLATABLE_VALUE({_action_value_type(f)}, {f.name})"
+        for f in msg.fields
+    )
+
+
+def _emit_action_assignments(msg: Message) -> str:
+    return "\n".join(
+        f"    m.{f.name} = this->{f.name}_.value(x...);"
+        for f in msg.fields
+    )
+
+
 def emit_struct(msg: Message) -> str:
     """Return the full C++ struct definition for a message, plus the
     matching ``On<Msg>Trigger`` class.
@@ -361,6 +389,8 @@ def emit_struct(msg: Message) -> str:
     encode_calls = "\n".join(_emit_encode_call(f) for f in msg.fields)
     decode_overrides = _emit_decode_overrides(msg)
     call_setters = _emit_call_setters(msg, pascal_case(msg.id))
+    action_setters = _emit_action_setters(msg)
+    action_assignments = _emit_action_assignments(msg)
     canonical = canonical_schema_string(msg).replace("\\", "\\\\").replace("\n", "\\n")
     sid = schema_id(msg)
     struct_name = pascal_case(msg.id)
@@ -455,6 +485,29 @@ class On{struct_name}Trigger : public esphome::Trigger<esphome::multicast_pubsub
 inline bool esphome::multicast_pubsub::messages::{struct_name}::Call::perform() {{
   return this->parent_->publish(this->topic_, this->msg_);
 }}
+
+namespace esphome::multicast_pubsub {{
+
+// Codegen-generated YAML action class for `multicast_pubsub.publish:
+// + message: {msg.id}`. One TEMPLATABLE_VALUE per declared field
+// (std::vector<T> for repeated fields). Python codegen calls
+// set_<field>(...) on the templated values it has, leaves the rest at
+// default. play() always assigns every field -- proto3 default-omission
+// keeps the wire size correct for unset fields.
+template<typename... Ts> class Publish{struct_name}Action
+    : public esphome::Action<Ts...>, public esphome::Parented<MulticastPubSub> {{
+ public:
+  TEMPLATABLE_VALUE(std::string, topic)
+{action_setters}
+
+  void play(Ts... x) override {{
+    esphome::multicast_pubsub::messages::{struct_name} m;
+{action_assignments}
+    this->parent_->publish(this->topic_.value(x...), m);
+  }}
+}};
+
+}}  // namespace esphome::multicast_pubsub
 """
 
 

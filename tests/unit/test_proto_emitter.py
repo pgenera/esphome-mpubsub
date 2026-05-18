@@ -302,6 +302,41 @@ def test_repeated_appears_in_canonical_form() -> None:
     assert canonical_schema_string(msg) == "1:repeated float:values"
 
 
+# ---------------------------------------------------------------------------
+# Publish<Msg>Action codegen
+# ---------------------------------------------------------------------------
+
+
+def test_emits_publish_action_class() -> None:
+    src = _struct(("temperature", "float", 1), ("room_id", "string", 2), id_="room_climate")
+    # Templated class deriving from Action + Parented
+    assert (
+        "class PublishRoomClimateAction"
+        in src
+    )
+    assert "public esphome::Action<Ts...>, public esphome::Parented<MulticastPubSub>" in src
+    # Topic + per-field TEMPLATABLE_VALUEs
+    assert "TEMPLATABLE_VALUE(std::string, topic)" in src
+    assert "TEMPLATABLE_VALUE(float, temperature)" in src
+    assert "TEMPLATABLE_VALUE(std::string, room_id)" in src
+    # play() builds the struct, assigns every field, publishes
+    assert "void play(Ts... x) override" in src
+    assert "m.temperature = this->temperature_.value(x...);" in src
+    assert "m.room_id = this->room_id_.value(x...);" in src
+    assert "this->parent_->publish(this->topic_.value(x...), m);" in src
+
+
+def test_publish_action_uses_vector_for_repeated_fields() -> None:
+    msg = Message(
+        id="door_events",
+        fields=(Field(name="open_at", type="uint32", tag=1, repeated=True),),
+    )
+    src = emit_struct(msg)
+    # Repeated -> TEMPLATABLE_VALUE wraps the whole std::vector<T>
+    assert "TEMPLATABLE_VALUE(std::vector<uint32_t>, open_at)" in src
+    assert "m.open_at = this->open_at_.value(x...);" in src
+
+
 def test_kitchen_sink_message() -> None:
     src = _struct(
         ("flag", "bool", 1),
