@@ -73,11 +73,50 @@ second with `flags=01` (FLAG_TEXT) and the ASCII float payload.
   automations. Validates that the two components coexist (the C++ MQTT
   client doesn't have a host port, so this one is `esphome config`-only).
 
-## probe.py
+## probe.py — third-implementation cross-check
 
-`tests/probe.py` is a single-file Python reference that joins the multicast
-group for a topic and decodes incoming frames using the same
-`tests/unit/reference.py` module the unit tests use. With `--publish TEXT` it
-crafts a valid packet and sends it. This gives us a fully independent
-implementation that the C++ component is cross-checked against in
-integration tests.
+`tests/probe.py` is a single-file Python tool that joins the multicast
+group for a topic, decodes incoming frames using the wire reference
+in `tests/unit/reference.py`, and (when `--schema` is given) decodes
+protobuf bodies via `tests/unit/protobuf.py` plus the codegen's
+`proto_emitter.py` for SCHEMA_ID computation.
+
+It's a **third independent implementation** of the wire protocol after
+the C++ component and the codegen-generated typed encoders. When all
+three agree the spec is in good shape.
+
+### Listening
+
+```bash
+# Schemaless: render every PROTOBUF field by tag + wire type
+python3 tests/probe.py --topic test/climate
+
+# Schema-aware: match incoming SCHEMA_ID against a YAML messages: block
+# and render fields by their declared names.
+python3 tests/probe.py --topic test/climate --schema tests/typed_publisher.yaml
+```
+
+### Publishing
+
+```bash
+# Raw payload (unchanged from earlier)
+python3 tests/probe.py --topic test/temp --publish "42.5"
+
+# Typed protobuf: needs --schema, picks a message id, sets fields by name
+python3 tests/probe.py --topic test/climate \
+    --schema tests/typed_subscriber.yaml \
+    --publish --message room_climate \
+    --field temperature=42.5 --field humidity=33.0 --field room_id=garage
+```
+
+Repeated fields: pass `--field name=value` multiple times for the same
+name. Non-string types coerce from the string form (`int(value)`,
+`float(value)`, etc).
+
+### Automated cross-check
+
+`tests/unit/test_probe_cross_check.py` boots the actual host-platform
+binaries from `tests/typed_publisher.yaml` and `tests/typed_subscriber.yaml`,
+runs probe.py against them in both directions, and asserts the typed
+fields show up where expected. Skipped automatically if the binaries
+aren't built; build them with `esphome compile tests/typed_*.yaml`.
