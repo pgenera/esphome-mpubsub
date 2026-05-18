@@ -64,6 +64,7 @@ class MulticastPubSub : public Component {
   void set_port(uint16_t port) { this->port_ = port; }
   void set_scope(Scope scope) { this->scope_ = scope; }
   void set_hops(uint8_t hops) { this->hops_ = hops; }
+  void set_well_known_groups(bool v) { this->well_known_groups_ = v; }
 
   void setup() override;
   void loop() override;
@@ -174,6 +175,7 @@ class MulticastPubSub : public Component {
   uint16_t port_{18512};
   Scope scope_{Scope::LINK_LOCAL};
   uint8_t hops_{1};
+  bool well_known_groups_{false};
 
 #ifdef USE_ESP8266
   struct udp_pcb *pcb_{nullptr};

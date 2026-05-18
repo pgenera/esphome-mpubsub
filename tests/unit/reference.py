@@ -37,21 +37,29 @@ VALID_SCOPES = (SCOPE_LINK_LOCAL, SCOPE_SITE_LOCAL, SCOPE_ORG_LOCAL)
 DEFAULT_PORT = 18512
 
 
-def topic_to_group(topic: str, scope: int = SCOPE_LINK_LOCAL) -> ipaddress.IPv6Address:
+def topic_to_group(
+    topic: str, scope: int = SCOPE_LINK_LOCAL, well_known: bool = False
+) -> ipaddress.IPv6Address:
     """Map a topic string to an IPv6 multicast address.
 
     The 128-bit address layout is::
 
         byte 0      : 0xFF                         (multicast prefix)
-        byte 1 hi   : 0x1                          (T=1, transient)
+        byte 1 hi   : T-bit  (0x1 = transient, 0x0 = well-known)
         byte 1 lo   : scope nibble (0x2/0x5/0x8)
         bytes 2..15 : SHA-256(utf8 topic)[0..14]   (112-bit topic hash)
+
+    ``well_known=True`` clears the T-bit so addresses fall in the
+    ``ff02::/ff05::/ff08::`` range instead of ``ff12::/ff15::/ff18::``.
+    Some consumer L2 gear treats the well-known range more permissively.
+    Publisher and every subscriber must agree.
     """
     if scope not in VALID_SCOPES:
         raise ValueError(f"Invalid scope nibble {scope:#x}")
     digest = hashlib.sha256(topic.encode("utf-8")).digest()[:14]
     first = 0xFF
-    second = (0x1 << 4) | (scope & 0xF)
+    t_bit = 0x0 if well_known else 0x1
+    second = (t_bit << 4) | (scope & 0xF)
     return ipaddress.IPv6Address(bytes((first, second)) + digest)
 
 

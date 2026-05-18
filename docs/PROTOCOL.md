@@ -34,7 +34,7 @@ group = 0xFF || 0x1<scope> || SHA-256(utf8(topic))[0..14]
 | Bits      | Field                | Value                                       |
 |-----------|----------------------|---------------------------------------------|
 | 0..7      | Multicast prefix     | `0xFF` (IPv6 multicast)                     |
-| 8..11     | Flags nibble (`T=1`) | `0x1` (transient, per RFC 4291 §2.7)        |
+| 8..11     | Flags nibble (T-bit) | `0x1` transient (default) / `0x0` well-known (opt-in, see §2.2) |
 | 12..15    | Scope nibble         | `0x2`, `0x5`, or `0x8` (see §2.1)           |
 | 16..127   | Topic hash           | `SHA-256(utf8(topic))[0..14]` (112 bits)    |
 
@@ -62,7 +62,23 @@ Choose the smallest scope that covers all participating devices. A smaller
 scope reduces the multicast routing surface area and bandwidth across
 uninvolved switches.
 
-### 2.2 Worked example
+### 2.2 Well-known group prefix (T-bit)
+
+Per RFC 4291 §2.7, hash-derived ad-hoc groups *should* set the T-bit
+(transient flag), so by default this component emits addresses in the
+`ff12::/ff15::/ff18::` range. Some consumer-grade L2 gear (switches doing
+aggressive MLD snooping, certain Wi-Fi APs) handles the well-known
+(`T=0`) range more permissively -- e.g. flooding ff02:: rather than
+pruning per-group membership. Setting `well_known_groups: true` clears
+the T-bit, shifting topic addresses into `ff02::/ff05::/ff08::` while
+leaving the SHA-256 prefix bits unchanged.
+
+This is a per-deployment wire-format choice. **Publisher and every
+subscriber must agree.** If one side has `well_known_groups: true` and
+another has the default, their topic-to-address mappings diverge and no
+packets are delivered.
+
+### 2.3 Worked example
 
 ```
 topic = "home/livingroom/temp"
