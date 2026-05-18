@@ -14,7 +14,7 @@ upstream form:
 external_components:
   - source:
       type: git
-      url: https://github.com/<owner>/esphome-multicast
+      url: https://github.com/pgenera/esphome-multicast-pubsub
       ref: main
     components: [multicast_pubsub]
 ```
