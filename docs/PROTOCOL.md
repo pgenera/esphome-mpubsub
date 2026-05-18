@@ -43,6 +43,13 @@ SHA-256 is safe for hash-table-style mapping: birthday-style collisions
 require ~`2^56` distinct topics on a single network, which is far beyond
 realistic.
 
+We use SHA-256 truncated to 14 bytes rather than a native-128-bit hash
+(xxHash3, MurmurHash3, etc.). Truncated SHA-2 is explicitly permitted by
+NIST (FIPS 180-4 §7); SHA-224 and SHA-384 are formal examples of the same
+pattern. Picking a hash we already ship gives us one vendored
+implementation rather than two, and the speed/flash overhead is small
+enough not to matter at one hash per `subscribe` / `publish` call.
+
 ### 2.1 Scopes
 
 | Name                 | Nibble | Address prefix | Travels over                                  |
