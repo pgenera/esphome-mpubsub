@@ -81,13 +81,22 @@ func (b *Bridge) Run(ctx context.Context) error {
 
 	// Configure the routing tables and joins from the config.
 	for _, entry := range b.cfg.Bridges {
-		group := TopicToGroup(entry.MPubsubTopic, b.scope)
 		switch entry.Direction {
 		case DirMQTTToMPubsub:
 			// Capture the loop variable so the closure refers to this entry.
 			e := entry
 			h := func(_ mqtt.Client, msg mqtt.Message) {
-				b.handleMQTTMessage(e.MPubsubTopic, group, msg)
+				// If the user didn't pin an mpubsub_topic, use the
+				// resolved MQTT topic. This is the case that makes
+				// wildcard subscriptions (`home/+/temp`) useful: each
+				// match keeps its own mpubsub identity instead of being
+				// collapsed onto one multicast group.
+				mpubsubTopic := e.MPubsubTopic
+				if mpubsubTopic == "" {
+					mpubsubTopic = msg.Topic()
+				}
+				group := TopicToGroup(mpubsubTopic, b.scope)
+				b.handleMQTTMessage(mpubsubTopic, group, msg)
 			}
 			// MQTT delivers messages at min(publish_qos, subscribe_qos). To
 			// surface the publisher's QoS to promote_qos, we must subscribe
@@ -100,10 +109,15 @@ func (b *Bridge) Run(ctx context.Context) error {
 			if token := b.mqtt.Subscribe(e.MQTTTopic, subQoS, h); token.Wait() && token.Error() != nil {
 				return token.Error()
 			}
+			mpubsubTopicLog := e.MPubsubTopic
+			if mpubsubTopicLog == "" {
+				mpubsubTopicLog = "(use mqtt topic)"
+			}
 			b.log.Info("subscribed mqtt -> mpubsub",
-				"mqtt_topic", e.MQTTTopic, "mpubsub_topic", e.MPubsubTopic,
-				"sub_qos", subQoS, "group", group.String())
+				"mqtt_topic", e.MQTTTopic, "mpubsub_topic", mpubsubTopicLog,
+				"sub_qos", subQoS)
 		case DirMPubsubToMQTT:
+			group := TopicToGroup(entry.MPubsubTopic, b.scope)
 			if err := b.mcast.Join(group); err != nil {
 				return err
 			}

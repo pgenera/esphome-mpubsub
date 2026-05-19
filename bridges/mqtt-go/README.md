@@ -43,8 +43,8 @@ See [`bridge.example.yaml`](bridge.example.yaml) for the config shape.
 | `mpubsub` | `interface` | (kernel default) | Egress interface name (`eth0`, `br-lan`, …). |
 | `mpubsub` | `encryption.key` | — | Optional XXTEA-256 passphrase, SHA-256'd to a 32-byte key. Must match the ESPHome devices' `mpubsub.encryption.key`. Enables encrypting outbound `mqtt_to_mpubsub` traffic and decrypting inbound `mpubsub_to_mqtt` traffic. |
 | `bridges[]` | `direction` | — | `mqtt_to_mpubsub` or `mpubsub_to_mqtt`. One-directional. |
-| `bridges[]` | `mqtt_topic` | — | The MQTT topic to subscribe to (mqtt→mpubsub) or publish to (mpubsub→mqtt). |
-| `bridges[]` | `mpubsub_topic` | — | The mpubsub topic. |
+| `bridges[]` | `mqtt_topic` | — | The MQTT topic to subscribe to (mqtt→mpubsub) or publish to (mpubsub→mqtt). MQTT wildcards (`+`, `#`) are accepted on `mqtt_to_mpubsub` entries. |
+| `bridges[]` | `mpubsub_topic` | — | The mpubsub topic. Required for `mpubsub_to_mqtt`. On `mqtt_to_mpubsub`, optional: omit to forward each MQTT message under its **resolved** topic (the `msg.Topic()` from the broker), which is what makes MQTT wildcards useful — each match keeps its identity instead of being collapsed onto one multicast group. mpubsub itself has no wildcard subscriptions, so wildcards are rejected here. |
 | `bridges[]` | `require_encryption` | `false` | Only valid on `mpubsub_to_mqtt` entries: drop plaintext datagrams for this mpubsub topic instead of forwarding them to MQTT. Requires `mpubsub.encryption.key`. |
 
 ## Notes

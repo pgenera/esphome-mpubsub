@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -173,11 +174,26 @@ func (c *Config) validate() error {
 		return fmt.Errorf("at least one bridge entry is required")
 	}
 	for i, b := range c.Bridges {
-		if b.MQTTTopic == "" || b.MPubsubTopic == "" {
-			return fmt.Errorf("bridges[%d]: mqtt_topic and mpubsub_topic are required", i)
+		if b.MQTTTopic == "" {
+			return fmt.Errorf("bridges[%d]: mqtt_topic is required", i)
 		}
 		switch b.Direction {
-		case DirMQTTToMPubsub, DirMPubsubToMQTT:
+		case DirMQTTToMPubsub:
+			// mpubsub_topic optional here: omit it to use the resolved
+			// MQTT topic (msg.Topic()) as the mpubsub topic at delivery
+			// time. This is what makes MQTT wildcard subscriptions like
+			// `home/+/temp` useful -- each match keeps its identity
+			// instead of being collapsed onto one multicast group.
+		case DirMPubsubToMQTT:
+			// mpubsub_topic is the join key; required and no wildcards
+			// (the protocol has no concept of wildcard subscriptions).
+			if b.MPubsubTopic == "" {
+				return fmt.Errorf("bridges[%d]: mpubsub_topic is required for mpubsub_to_mqtt entries", i)
+			}
+			if strings.ContainsAny(b.MPubsubTopic, "+#") {
+				return fmt.Errorf("bridges[%d]: mpubsub_topic %q contains MQTT wildcards; the mpubsub protocol has no wildcard subscriptions",
+					i, b.MPubsubTopic)
+			}
 		default:
 			return fmt.Errorf("bridges[%d]: unknown direction %q (want %q or %q)",
 				i, b.Direction, DirMQTTToMPubsub, DirMPubsubToMQTT)

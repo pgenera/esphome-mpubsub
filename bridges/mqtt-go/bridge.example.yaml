@@ -28,10 +28,18 @@ mpubsub:
   #   key: "any-length passphrase"
 
 bridges:
-  # Take temperature published over MQTT and rebroadcast on multicast.
+  # Take temperature published over MQTT and rebroadcast on multicast under
+  # a renamed topic.
   - direction: mqtt_to_mpubsub
     mqtt_topic: "home/bridge/in/temp"
     mpubsub_topic: "home/livingroom/temp"
+
+  # MQTT wildcard fan-out: omit mpubsub_topic to forward each matched MQTT
+  # message under its own resolved topic. Here `home/bedroom/temp`,
+  # `home/garage/temp`, etc. each end up on the matching mpubsub group --
+  # subscribers can listen on the exact topic they care about.
+  - direction: mqtt_to_mpubsub
+    mqtt_topic: "home/+/temp"
 
   # Take a multicast message and republish it to MQTT.
   - direction: mpubsub_to_mqtt
