@@ -51,6 +51,8 @@ OnMessageTrigger = multicast_pubsub_ns.class_("OnMessageTrigger", automation.Tri
 
 CONF_SCOPE = "scope"
 CONF_HOPS = "hops"
+CONF_RETRANSMIT_COUNT = "retransmit_count"
+CONF_RETRANSMIT_DELAY = "retransmit_delay"
 CONF_ON_MESSAGE = "on_message"
 CONF_MESSAGES = "messages"
 CONF_FIELDS = "fields"
@@ -238,6 +240,8 @@ CONFIG_SCHEMA = cv.Schema(
         cv.Optional(CONF_PORT, default=18512): cv.port,
         cv.Optional(CONF_SCOPE, default="link-local"): cv.enum(SCOPES, lower=True),
         cv.Optional(CONF_HOPS, default=1): cv.int_range(min=1, max=255),
+        cv.Optional(CONF_RETRANSMIT_COUNT, default=1): cv.int_range(min=1, max=255),
+        cv.Optional(CONF_RETRANSMIT_DELAY, default="100ms"): cv.positive_time_period_milliseconds,
         cv.Optional(CONF_MESSAGES, default=list): _messages_validator,
         cv.Optional(CONF_ON_MESSAGE): _on_message_validator,
     }
@@ -326,6 +330,8 @@ async def to_code(config):
     cg.add(var.set_port(config[CONF_PORT]))
     cg.add(var.set_scope(config[CONF_SCOPE]))
     cg.add(var.set_hops(config[CONF_HOPS]))
+    cg.add(var.set_retransmit_count(config[CONF_RETRANSMIT_COUNT]))
+    cg.add(var.set_retransmit_delay_ms(config[CONF_RETRANSMIT_DELAY].total_milliseconds))
 
     # Auto-create diagnostic sensors for messages sent / received. Picked
     # up automatically by anything that iterates registered sensors

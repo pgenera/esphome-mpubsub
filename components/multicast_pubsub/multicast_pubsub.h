@@ -64,6 +64,11 @@ class MulticastPubSub : public Component {
   void set_port(uint16_t port) { this->port_ = port; }
   void set_scope(Scope scope) { this->scope_ = scope; }
   void set_hops(uint8_t hops) { this->hops_ = hops; }
+  // retransmit_count = number of total transmissions per publish() call
+  // (1 = no retransmission). delay is the spacing between successive
+  // sends; the first send is unconditional and synchronous.
+  void set_retransmit_count(uint8_t count) { this->retransmit_count_ = count; }
+  void set_retransmit_delay_ms(uint32_t delay_ms) { this->retransmit_delay_ms_ = delay_ms; }
 
   void setup() override;
   void loop() override;
@@ -156,6 +161,15 @@ class MulticastPubSub : public Component {
   // Pump the auto-created diagnostic sensors. Both platform paths call
   // this from loop() so the lwip-raw build still emits prometheus data.
   void publish_metrics_();
+  // Send the already-encoded `datagram` once to `group`. Used by both the
+  // initial publish() send and any retransmits scheduled via set_timeout.
+  // Returns false on transport-level failure.
+  bool send_datagram_(const std::vector<uint8_t> &datagram, const GroupAddr &group);
+  // If retransmit_count_ > 1, schedule (count-1) deferred resends via the
+  // Component::set_timeout machinery so loop() stays unblocked. The
+  // shared_ptr-captured buffer keeps the encoded packet alive until the
+  // last firing.
+  void schedule_retransmits_(std::shared_ptr<std::vector<uint8_t>> datagram, const GroupAddr &group);
 #ifdef USE_ESP8266
   // Join `group` via mld6_joingroup. Called from setup() for groups
   // that exist before the stack is up, and from find_or_create_subscription_
@@ -174,6 +188,8 @@ class MulticastPubSub : public Component {
   uint16_t port_{18512};
   Scope scope_{Scope::LINK_LOCAL};
   uint8_t hops_{1};
+  uint8_t retransmit_count_{1};
+  uint32_t retransmit_delay_ms_{100};
 
 #ifdef USE_ESP8266
   struct udp_pcb *pcb_{nullptr};

@@ -8,6 +8,8 @@ multicast_pubsub:
   port: 18512                   # uint16, default 18512
   scope: link-local             # link-local | site-local | organization-local
   hops: 1                       # uint8 1..255, default 1
+  retransmit_count: 1           # int 1..255, default 1 (no retransmission)
+  retransmit_delay: 100ms       # time period >= 0, default 100ms
   messages:                     # optional list of typed message schemas
     - id: room_climate
       fields:
@@ -26,6 +28,8 @@ multicast_pubsub:
 | `port`       | no       | uint16   | `18512`       | UDP port. Both publishers and subscribers must use the same value. Adjacent to ESPHome's `udp:` default (18511). |
 | `scope`      | no       | enum     | `link-local`  | IPv6 multicast scope. See `docs/PROTOCOL.md` §2.1.                          |
 | `hops`       | no       | int 1–255| `1`           | `IPV6_MULTICAST_HOPS`. Raise above 1 if you need multi-subnet routing.      |
+| `retransmit_count` | no | int 1–255 | `1` | Number of UDP datagrams emitted per `publish()` call. `1` (default) = no retransmission. The first packet is always sent synchronously; the rest are scheduled non-blocking via `Component::set_timeout`. |
+| `retransmit_delay` | no | time period ≥0 | `100ms` | Spacing between successive sends. `0ms` is supported (resends fire on consecutive loop iterations). |
 | `on_message` | no       | list     | empty         | Topic-keyed triggers. The trigger argument `x` is `std::vector<uint8_t>`.   |
 | `messages`   | no       | list     | empty         | Typed protobuf message schemas. Each entry generates a C++ struct named after `id` (PascalCase). Requires `api:` to also be configured (we use its protobuf primitives). |
 

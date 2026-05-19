@@ -153,8 +153,10 @@ void MulticastPubSub::dump_config() {
                 "  Port: %u\n"
                 "  Scope: %s\n"
                 "  Hops: %u\n"
+                "  Retransmit: %u packet(s), %u ms apart\n"
                 "  Subscriptions: %u",
-                this->port_, scope_name, this->hops_, static_cast<unsigned>(this->subscriptions_.size()));
+                this->port_, scope_name, this->hops_, this->retransmit_count_, this->retransmit_delay_ms_,
+                static_cast<unsigned>(this->subscriptions_.size()));
   for (const auto &sub : this->subscriptions_) {
     char addr_buf[64];
     group_to_string(sub.group, addr_buf, sizeof(addr_buf));
@@ -199,36 +201,45 @@ bool MulticastPubSub::publish(const std::string &topic, std::span<const uint8_t>
     this->status_set_warning(LOG_STR("oversize publish payload"));
     return false;
   }
+  if (netif_default == nullptr) {
+    ESP_LOGW(TAG, "publish(%s): no netif yet", topic.c_str());
+    return false;
+  }
   uint32_t crc = topic_crc32(topic);
   GroupAddr group = topic_to_group(topic, this->scope_);
   size_t total = HEADER_LEN + payload.size();
+  auto datagram = std::make_shared<std::vector<uint8_t>>(total);
+  encode_header(crc, encoding, static_cast<uint16_t>(payload.size()), datagram->data());
+  std::memcpy(datagram->data() + HEADER_LEN, payload.data(), payload.size());
 
-  struct pbuf *p = pbuf_alloc(PBUF_TRANSPORT, static_cast<u16_t>(total), PBUF_RAM);
-  if (p == nullptr) {
-    ESP_LOGW(TAG, "publish(%s): pbuf_alloc(%zu) failed", topic.c_str(), total);
-    return false;
-  }
-  auto *buf = static_cast<uint8_t *>(p->payload);
-  encode_header(crc, encoding, static_cast<uint16_t>(payload.size()), buf);
-  std::memcpy(buf + HEADER_LEN, payload.data(), payload.size());
-
-  ip_addr_t dest = to_ip_addr(group);
-  // For IPv6 multicast lwip needs the egress netif spelled out
-  // explicitly (no route lookup for link-local). udp_sendto on its own
-  // returns ERR_RTE (-4); udp_sendto_if uses the netif we pass.
-  if (netif_default == nullptr) {
-    ESP_LOGW(TAG, "publish(%s): no netif yet", topic.c_str());
-    pbuf_free(p);
-    return false;
-  }
-  err_t err = udp_sendto_if(this->pcb_, p, &dest, this->port_, netif_default);
-  pbuf_free(p);
-  if (err != ERR_OK) {
-    ESP_LOGW(TAG, "publish(%s): udp_sendto_if err %d", topic.c_str(), err);
+  if (!this->send_datagram_(*datagram, group)) {
+    ESP_LOGW(TAG, "publish(%s): initial send failed", topic.c_str());
     return false;
   }
   this->messages_sent_++;
   ESP_LOGV(TAG, "published %zu bytes to '%s'", payload.size(), topic.c_str());
+  this->schedule_retransmits_(datagram, group);
+  return true;
+}
+
+bool MulticastPubSub::send_datagram_(const std::vector<uint8_t> &datagram, const GroupAddr &group) {
+  if (this->pcb_ == nullptr || netif_default == nullptr)
+    return false;
+  struct pbuf *p = pbuf_alloc(PBUF_TRANSPORT, static_cast<u16_t>(datagram.size()), PBUF_RAM);
+  if (p == nullptr) {
+    ESP_LOGW(TAG, "send_datagram: pbuf_alloc(%zu) failed", datagram.size());
+    return false;
+  }
+  std::memcpy(p->payload, datagram.data(), datagram.size());
+  ip_addr_t dest = to_ip_addr(group);
+  // udp_sendto_if (not plain udp_sendto): link-local IPv6 multicast has no
+  // route lookup, so the egress netif must be passed explicitly.
+  err_t err = udp_sendto_if(this->pcb_, p, &dest, this->port_, netif_default);
+  pbuf_free(p);
+  if (err != ERR_OK) {
+    ESP_LOGW(TAG, "send_datagram: udp_sendto_if err %d", err);
+    return false;
+  }
   return true;
 }
 
@@ -293,6 +304,18 @@ void MulticastPubSub::publish_metrics_() {
   if (this->messages_received_sensor_ != nullptr && this->messages_received_ != this->last_published_received_) {
     this->messages_received_sensor_->publish_state(static_cast<float>(this->messages_received_));
     this->last_published_received_ = this->messages_received_;
+  }
+}
+
+void MulticastPubSub::schedule_retransmits_(std::shared_ptr<std::vector<uint8_t>> datagram, const GroupAddr &group) {
+  // Schedule (count - 1) additional sends via Component::set_timeout, which
+  // is dispatched from loop() so each fire is non-blocking. The shared_ptr
+  // captured by value in each lambda keeps the buffer alive until the
+  // final firing.
+  for (uint8_t i = 1; i < this->retransmit_count_; i++) {
+    this->set_timeout(this->retransmit_delay_ms_ * i, [this, datagram, group]() {
+      this->send_datagram_(*datagram, group);
+    });
   }
 }
 
@@ -407,8 +430,10 @@ void MulticastPubSub::dump_config() {
                 "  Port: %u\n"
                 "  Scope: %s\n"
                 "  Hops: %u\n"
+                "  Retransmit: %u packet(s), %u ms apart\n"
                 "  Subscriptions: %u",
-                this->port_, scope_name, this->hops_, static_cast<unsigned>(this->subscriptions_.size()));
+                this->port_, scope_name, this->hops_, this->retransmit_count_, this->retransmit_delay_ms_,
+                static_cast<unsigned>(this->subscriptions_.size()));
   for (const auto &sub : this->subscriptions_) {
     char addr_buf[64];
     group_to_string(sub.group, addr_buf, sizeof(addr_buf));
@@ -465,24 +490,34 @@ bool MulticastPubSub::publish(const std::string &topic, std::span<const uint8_t>
   }
   uint32_t crc = topic_crc32(topic);
   GroupAddr group = topic_to_group(topic, this->scope_);
+  size_t total = HEADER_LEN + payload.size();
+  auto datagram = std::make_shared<std::vector<uint8_t>>(total);
+  encode_header(crc, encoding, static_cast<uint16_t>(payload.size()), datagram->data());
+  std::memcpy(datagram->data() + HEADER_LEN, payload.data(), payload.size());
 
-  std::array<uint8_t, MAX_DATAGRAM> buf;
-  encode_header(crc, encoding, static_cast<uint16_t>(payload.size()), buf.data());
-  std::memcpy(buf.data() + HEADER_LEN, payload.data(), payload.size());
-
-  struct sockaddr_in6 dest {};
-  dest.sin6_family = AF_INET6;
-  dest.sin6_port = htons(this->port_);
-  std::memcpy(&dest.sin6_addr, group.data(), group.size());
-
-  auto sent = this->socket_->sendto(buf.data(), HEADER_LEN + payload.size(), 0,
-                                    reinterpret_cast<struct sockaddr *>(&dest), sizeof(dest));
-  if (sent < 0) {
-    ESP_LOGW(TAG, "publish(%s): sendto errno %d", topic.c_str(), errno);
+  if (!this->send_datagram_(*datagram, group)) {
+    ESP_LOGW(TAG, "publish(%s): initial send failed", topic.c_str());
     return false;
   }
   this->messages_sent_++;
   ESP_LOGV(TAG, "published %zu bytes to '%s'", payload.size(), topic.c_str());
+  this->schedule_retransmits_(datagram, group);
+  return true;
+}
+
+bool MulticastPubSub::send_datagram_(const std::vector<uint8_t> &datagram, const GroupAddr &group) {
+  if (!this->socket_)
+    return false;
+  struct sockaddr_in6 dest {};
+  dest.sin6_family = AF_INET6;
+  dest.sin6_port = htons(this->port_);
+  std::memcpy(&dest.sin6_addr, group.data(), group.size());
+  auto sent = this->socket_->sendto(datagram.data(), datagram.size(), 0,
+                                    reinterpret_cast<struct sockaddr *>(&dest), sizeof(dest));
+  if (sent < 0) {
+    ESP_LOGW(TAG, "send_datagram: sendto errno %d", errno);
+    return false;
+  }
   return true;
 }
 
@@ -530,6 +565,20 @@ void MulticastPubSub::deliver_(uint32_t crc, Encoding encoding, std::span<const 
         ESP_LOGV(TAG, "no typed callback for topic '%s' schema_id=%04x", sub.topic.c_str(), schema_id);
       }
     }
+  }
+}
+
+void MulticastPubSub::schedule_retransmits_(std::shared_ptr<std::vector<uint8_t>> datagram, const GroupAddr &group) {
+  // Schedule (count - 1) additional sends via Component::set_timeout, which
+  // is dispatched from loop() so each fire is non-blocking. The shared_ptr
+  // captured by value in each lambda keeps the buffer alive until the
+  // final firing. delay_ms == 0 still goes through set_timeout: the resends
+  // fire on the next loop iteration rather than synchronously, which keeps
+  // a high retransmit_count from starving other components.
+  for (uint8_t i = 1; i < this->retransmit_count_; i++) {
+    this->set_timeout(this->retransmit_delay_ms_ * i, [this, datagram, group]() {
+      this->send_datagram_(*datagram, group);
+    });
   }
 }
 
