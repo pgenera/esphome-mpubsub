@@ -3,15 +3,19 @@
 See ../../README.md for the protocol specification.
 """
 
+import hashlib
+
 from esphome import automation
 import esphome.codegen as cg
 from esphome.components import sensor as esphome_sensor
 import esphome.config_validation as cv
+from esphome.components.api import CONF_ENCRYPTION
 from esphome.const import (
     CONF_ACCURACY_DECIMALS,
     CONF_DISABLED_BY_DEFAULT,
     CONF_ENTITY_CATEGORY,
     CONF_ID,
+    CONF_KEY,
     CONF_MQTT_ID,
     CONF_NAME,
     CONF_PAYLOAD,
@@ -42,7 +46,7 @@ DEPENDENCIES = ["network"]
 # ~10KB cost of the API server. (A future upstream refactor splitting
 # api/proto.{h,cpp} into a leaf `api_proto` sub-component would let us
 # bring in only the protobuf primitives without the server runtime.)
-AUTO_LOAD = ["socket", "sensor"]
+AUTO_LOAD = ["socket", "sensor", "xxtea"]
 MULTI_CONF = True
 
 multicast_pubsub_ns = cg.esphome_ns.namespace("multicast_pubsub")
@@ -260,6 +264,14 @@ CONFIG_SCHEMA = cv.Schema(
         cv.Optional(CONF_HOPS, default=1): cv.int_range(min=1, max=255),
         cv.Optional(CONF_RETRANSMIT_COUNT, default=1): _retransmit_count_validator,
         cv.Optional(CONF_RETRANSMIT_DELAY, default="100ms"): cv.positive_time_period_milliseconds,
+        # Optional XXTEA-256 payload encryption. The user-supplied key string
+        # is SHA-256'd to 32 bytes at codegen time -- same convention as
+        # packet_transport's `encryption.key`.
+        cv.Optional(CONF_ENCRYPTION): cv.Schema(
+            {
+                cv.Required(CONF_KEY): cv.string_strict,
+            }
+        ),
         cv.Optional(CONF_MESSAGES, default=list): _messages_validator,
         cv.Optional(CONF_ON_MESSAGE): _on_message_validator,
     }
@@ -362,6 +374,12 @@ async def to_code(config):
     cg.add(var.set_hops(config[CONF_HOPS]))
     cg.add(var.set_retransmit_count(config[CONF_RETRANSMIT_COUNT]))
     cg.add(var.set_retransmit_delay_ms(config[CONF_RETRANSMIT_DELAY].total_milliseconds))
+
+    if CONF_ENCRYPTION in config:
+        # Mirror packet_transport's hash_encryption_key(): SHA-256 the user
+        # passphrase to a deterministic 32-byte XXTEA-256 key.
+        digest = list(hashlib.sha256(config[CONF_ENCRYPTION][CONF_KEY].encode()).digest())
+        cg.add(var.set_encryption_key(digest))
 
     # Auto-create diagnostic sensors for messages sent / received. Picked
     # up automatically by anything that iterates registered sensors

@@ -48,6 +48,10 @@ static const char *err_name(DecodeError e) {
       return "UNKNOWN_ENCODING";
     case DecodeError::LENGTH_MISMATCH:
       return "LENGTH_MISMATCH";
+    case DecodeError::UNKNOWN_ENC_MODE:
+      return "UNKNOWN_ENC_MODE";
+    case DecodeError::CIPHERTEXT_TOO_SHORT:
+      return "CIPHERTEXT_TOO_SHORT";
   }
   return "UNKNOWN";
 }

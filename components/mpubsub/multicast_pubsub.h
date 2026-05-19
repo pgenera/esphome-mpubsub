@@ -76,6 +76,19 @@ class MulticastPubSub : public Component {
   void set_retransmit_count(int16_t count) { this->retransmit_count_ = count; }
   int16_t get_retransmit_count() const { return this->retransmit_count_; }
   void set_retransmit_delay_ms(uint32_t delay_ms) { this->retransmit_delay_ms_ = delay_ms; }
+  // Enable XXTEA-256 payload encryption. The 32-byte key is the SHA-256
+  // digest of the user's configured passphrase (matches the convention
+  // packet_transport uses for its `encryption.key` option). Once set, every
+  // outgoing publish() is encrypted; incoming encrypted datagrams are
+  // decrypted with this key, while incoming plaintext datagrams continue
+  // to be dispatched (mixed-mode deployments are allowed).
+  void set_encryption_key(std::vector<uint8_t> key) {
+    this->encryption_enabled_ = key.size() == 32;
+    if (this->encryption_enabled_) {
+      for (size_t i = 0; i < 32; i++)
+        this->encryption_key_bytes_[i] = key[i];
+    }
+  }
 
   void setup() override;
   void loop() override;
@@ -205,6 +218,12 @@ class MulticastPubSub : public Component {
   uint8_t hops_{1};
   int16_t retransmit_count_{1};
   uint32_t retransmit_delay_ms_{100};
+  bool encryption_enabled_{false};
+  // 32 bytes = 8 32-bit XXTEA key words. We store as bytes and cast to
+  // uint32_t* at call time -- the same byte layout packet_transport uses,
+  // which makes the SHA-256 digest interpretation portable across hosts
+  // (both x86 and Xtensa are little-endian, so the word view agrees).
+  alignas(uint32_t) uint8_t encryption_key_bytes_[32]{};
 
 #ifdef USE_ESP8266
   struct udp_pcb *pcb_{nullptr};

@@ -90,9 +90,9 @@ def test_cpp_decode_rejects_invalid(mutation, expected_err: str) -> None:
     assert line == f"ERR {expected_err}", line
 
 
-def test_cpp_ignores_reserved_bytes() -> None:
+def test_cpp_ignores_reserved_byte_11() -> None:
+    # Byte 10 is now ENC_MODE; only byte 11 stays fully reserved.
     pkt = bytearray(encode("t", b"hi"))
-    pkt[10] = 0xAB
     pkt[11] = 0xCD
     [line] = _run([f"D {bytes(pkt).hex()}"])
     assert line.startswith("OK")

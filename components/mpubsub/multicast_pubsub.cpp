@@ -7,6 +7,7 @@
 #include <cstdio>
 #include <cstring>
 
+#include "esphome/components/xxtea/xxtea.h"
 #include "esphome/core/log.h"
 
 namespace esphome::multicast_pubsub {
@@ -162,8 +163,10 @@ void MulticastPubSub::dump_config() {
                 "  Scope: %s\n"
                 "  Hops: %u\n"
                 "  Retransmit: %s\n"
+                "  Encryption: %s\n"
                 "  Subscriptions: %u",
                 this->port_, scope_name, this->hops_, rt_buf,
+                this->encryption_enabled_ ? "xxtea-256" : "none",
                 static_cast<unsigned>(this->subscriptions_.size()));
   for (const auto &sub : this->subscriptions_) {
     char addr_buf[64];
@@ -203,9 +206,14 @@ bool MulticastPubSub::publish(const std::string &topic, std::span<const uint8_t>
     ESP_LOGW(TAG, "publish(%s): pcb not ready", topic.c_str());
     return false;
   }
-  if (payload.size() > MAX_PAYLOAD) {
+  // The encrypted body is roundup4(4 + payload.size()); the +4 is a CRC32
+  // prefix carried inside the ciphertext, so encrypted publishes are capped
+  // 4 bytes lower than plaintext ones (the up-to-3 bytes of XXTEA word
+  // padding still fit under the 1220-byte cap).
+  size_t effective_max = this->encryption_enabled_ ? (MAX_PAYLOAD - 4) : MAX_PAYLOAD;
+  if (payload.size() > effective_max) {
     ESP_LOGE(TAG, "publish('%s') rejected: payload %zu bytes exceeds max %zu (datagram limit %zu - 12-byte header)",
-             topic.c_str(), payload.size(), MAX_PAYLOAD, MAX_DATAGRAM);
+             topic.c_str(), payload.size(), effective_max, MAX_DATAGRAM);
     this->status_set_warning(LOG_STR("oversize publish payload"));
     return false;
   }
@@ -215,10 +223,24 @@ bool MulticastPubSub::publish(const std::string &topic, std::span<const uint8_t>
   }
   uint32_t crc = topic_crc32(topic);
   GroupAddr group = topic_to_group(topic, this->scope_);
-  size_t total = HEADER_LEN + payload.size();
+  EncMode mode = this->encryption_enabled_ ? EncMode::XXTEA : EncMode::NONE;
+  size_t body_len = (mode == EncMode::XXTEA) ? xxtea_ciphertext_len(payload.size()) : payload.size();
+  size_t total = HEADER_LEN + body_len;
   auto datagram = std::make_shared<std::vector<uint8_t>>(total);
-  encode_header(crc, encoding, static_cast<uint16_t>(payload.size()), datagram->data());
-  std::memcpy(datagram->data() + HEADER_LEN, payload.data(), payload.size());
+  encode_header(crc, encoding, static_cast<uint16_t>(payload.size()), datagram->data(), mode);
+  uint8_t *body = datagram->data() + HEADER_LEN;
+  if (mode == EncMode::XXTEA) {
+    body[0] = uint8_t(crc);
+    body[1] = uint8_t(crc >> 8);
+    body[2] = uint8_t(crc >> 16);
+    body[3] = uint8_t(crc >> 24);
+    std::memcpy(body + 4, payload.data(), payload.size());
+    std::memset(body + 4 + payload.size(), 0, body_len - 4 - payload.size());
+    xxtea::encrypt(reinterpret_cast<uint32_t *>(body), body_len / 4,
+                   reinterpret_cast<const uint32_t *>(this->encryption_key_bytes_));
+  } else {
+    std::memcpy(body, payload.data(), payload.size());
+  }
 
   if (!this->send_datagram_(*datagram, group)) {
     ESP_LOGW(TAG, "publish(%s): initial send failed", topic.c_str());
@@ -277,6 +299,28 @@ void MulticastPubSub::on_packet_(std::span<const uint8_t> raw) {
   auto err = decode(raw, &pkt);
   if (err != DecodeError::OK) {
     ESP_LOGV(TAG, "drop packet: decode err %u", static_cast<unsigned>(err));
+    return;
+  }
+  if (pkt.enc_mode == EncMode::XXTEA) {
+    if (!this->encryption_enabled_) {
+      ESP_LOGV(TAG, "drop encrypted packet: this node has no encryption key");
+      return;
+    }
+    // In-place decrypt into a stack-local buffer; the decrypted span is
+    // only handed to deliver_(), which dispatches callbacks synchronously,
+    // so the buffer's lifetime is sufficient.
+    std::array<uint8_t, MAX_DATAGRAM> work;
+    size_t clen = pkt.payload.size();
+    if (clen > work.size()) {
+      ESP_LOGV(TAG, "drop encrypted packet: ciphertext %zu exceeds buffer", clen);
+      return;
+    }
+    std::memcpy(work.data(), pkt.payload.data(), clen);
+    xxtea::decrypt(reinterpret_cast<uint32_t *>(work.data()), clen / 4,
+                   reinterpret_cast<const uint32_t *>(this->encryption_key_bytes_));
+    uint32_t crc = uint32_t(work[0]) | (uint32_t(work[1]) << 8) | (uint32_t(work[2]) << 16) | (uint32_t(work[3]) << 24);
+    std::span<const uint8_t> body(work.data() + 4, pkt.plaintext_len);
+    this->deliver_(crc, pkt.encoding, body);
     return;
   }
   this->deliver_(pkt.topic_crc, pkt.encoding, pkt.payload);
@@ -448,6 +492,25 @@ void MulticastPubSub::on_packet_(std::span<const uint8_t> raw) {
     ESP_LOGV(TAG, "drop packet: decode err %u", static_cast<unsigned>(err));
     return;
   }
+  if (pkt.enc_mode == EncMode::XXTEA) {
+    if (!this->encryption_enabled_) {
+      ESP_LOGV(TAG, "drop encrypted packet: this node has no encryption key");
+      return;
+    }
+    std::array<uint8_t, MAX_DATAGRAM> work;
+    size_t clen = pkt.payload.size();
+    if (clen > work.size()) {
+      ESP_LOGV(TAG, "drop encrypted packet: ciphertext %zu exceeds buffer", clen);
+      return;
+    }
+    std::memcpy(work.data(), pkt.payload.data(), clen);
+    xxtea::decrypt(reinterpret_cast<uint32_t *>(work.data()), clen / 4,
+                   reinterpret_cast<const uint32_t *>(this->encryption_key_bytes_));
+    uint32_t crc = uint32_t(work[0]) | (uint32_t(work[1]) << 8) | (uint32_t(work[2]) << 16) | (uint32_t(work[3]) << 24);
+    std::span<const uint8_t> body(work.data() + 4, pkt.plaintext_len);
+    this->deliver_(crc, pkt.encoding, body);
+    return;
+  }
   this->deliver_(pkt.topic_crc, pkt.encoding, pkt.payload);
 }
 
@@ -488,8 +551,10 @@ void MulticastPubSub::dump_config() {
                 "  Scope: %s\n"
                 "  Hops: %u\n"
                 "  Retransmit: %s\n"
+                "  Encryption: %s\n"
                 "  Subscriptions: %u",
                 this->port_, scope_name, this->hops_, rt_buf,
+                this->encryption_enabled_ ? "xxtea-256" : "none",
                 static_cast<unsigned>(this->subscriptions_.size()));
   for (const auto &sub : this->subscriptions_) {
     char addr_buf[64];
@@ -539,18 +604,37 @@ bool MulticastPubSub::publish(const std::string &topic, std::span<const uint8_t>
     ESP_LOGW(TAG, "publish(%s): socket not ready", topic.c_str());
     return false;
   }
-  if (payload.size() > MAX_PAYLOAD) {
+  // The encrypted body is roundup4(4 + payload.size()); the +4 is a CRC32
+  // prefix carried inside the ciphertext, so encrypted publishes are capped
+  // 4 bytes lower than plaintext ones (the up-to-3 bytes of XXTEA word
+  // padding still fit under the 1220-byte cap).
+  size_t effective_max = this->encryption_enabled_ ? (MAX_PAYLOAD - 4) : MAX_PAYLOAD;
+  if (payload.size() > effective_max) {
     ESP_LOGE(TAG, "publish('%s') rejected: payload %zu bytes exceeds max %zu (datagram limit %zu - 12-byte header)",
-             topic.c_str(), payload.size(), MAX_PAYLOAD, MAX_DATAGRAM);
+             topic.c_str(), payload.size(), effective_max, MAX_DATAGRAM);
     this->status_set_warning(LOG_STR("oversize publish payload"));
     return false;
   }
   uint32_t crc = topic_crc32(topic);
   GroupAddr group = topic_to_group(topic, this->scope_);
-  size_t total = HEADER_LEN + payload.size();
+  EncMode mode = this->encryption_enabled_ ? EncMode::XXTEA : EncMode::NONE;
+  size_t body_len = (mode == EncMode::XXTEA) ? xxtea_ciphertext_len(payload.size()) : payload.size();
+  size_t total = HEADER_LEN + body_len;
   auto datagram = std::make_shared<std::vector<uint8_t>>(total);
-  encode_header(crc, encoding, static_cast<uint16_t>(payload.size()), datagram->data());
-  std::memcpy(datagram->data() + HEADER_LEN, payload.data(), payload.size());
+  encode_header(crc, encoding, static_cast<uint16_t>(payload.size()), datagram->data(), mode);
+  uint8_t *body = datagram->data() + HEADER_LEN;
+  if (mode == EncMode::XXTEA) {
+    body[0] = uint8_t(crc);
+    body[1] = uint8_t(crc >> 8);
+    body[2] = uint8_t(crc >> 16);
+    body[3] = uint8_t(crc >> 24);
+    std::memcpy(body + 4, payload.data(), payload.size());
+    std::memset(body + 4 + payload.size(), 0, body_len - 4 - payload.size());
+    xxtea::encrypt(reinterpret_cast<uint32_t *>(body), body_len / 4,
+                   reinterpret_cast<const uint32_t *>(this->encryption_key_bytes_));
+  } else {
+    std::memcpy(body, payload.data(), payload.size());
+  }
 
   if (!this->send_datagram_(*datagram, group)) {
     ESP_LOGW(TAG, "publish(%s): initial send failed", topic.c_str());

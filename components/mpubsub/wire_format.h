@@ -4,7 +4,7 @@
 //
 //   byte:  0    1    2    3    4    5    6    7    8    9   10   11
 //         +----+----+----+----+----+----+----+----+----+----+----+----+
-//         | 'M'| 'P'| VER| ENC|        TOPIC_CRC32         | PAY_LEN  | RSV
+//         | 'M'| 'P'| VER| ENC|        TOPIC_CRC32         | PAY_LEN  |ENM | RSV
 //         +----+----+----+----+----+----+----+----+----+----+----+----+
 //
 // Byte 3 (ENCODING) tells the receiver how to parse the body:
@@ -12,6 +12,18 @@
 //   0x01 = PROTOBUF  -- body starts with a 2-byte SCHEMA_ID (LE),
 //                       then protobuf-encoded bytes (see docs/TYPED_MESSAGES_PLAN.md)
 //   0x02..0xFF       -- reserved, receivers MUST drop
+//
+// Byte 10 (ENC_MODE) signals whether the body is encrypted:
+//   0x00 = NONE  -- plaintext (default; bytes 4-7 carry the topic CRC and
+//                    PAY_LEN equals the on-wire body length).
+//   0x01 = XXTEA -- the body is XXTEA-256 ciphertext over
+//                    [TOPIC_CRC32 LE (4 bytes) || plaintext payload],
+//                    zero-padded up to max(8, roundup4(4 + PAY_LEN)) bytes
+//                    (XXTEA needs n>=2 32-bit words). PAY_LEN stays the
+//                    plaintext payload length; bytes 4-7 are written as
+//                    zero by the sender and ignored on receive (the real
+//                    CRC32 lives at the start of the decrypted plaintext).
+//   0x02..0xFF       -- reserved, receivers MUST drop.
 //
 // See ../../docs/PROTOCOL.md for the full specification and matching
 // Python reference in tests/unit/reference.py.
@@ -44,6 +56,27 @@ constexpr bool is_known_encoding(uint8_t value) {
   return value == static_cast<uint8_t>(Encoding::RAW) || value == static_cast<uint8_t>(Encoding::PROTOBUF);
 }
 
+enum class EncMode : uint8_t {
+  NONE = 0x00,
+  XXTEA = 0x01,
+  // 0x02..0xFF reserved.
+};
+
+constexpr bool is_known_enc_mode(uint8_t value) {
+  return value == static_cast<uint8_t>(EncMode::NONE) || value == static_cast<uint8_t>(EncMode::XXTEA);
+}
+
+// Ciphertext length for a plaintext payload of `payload_len` bytes under
+// EncMode::XXTEA. Equals max(8, roundup4(4 + payload_len)): we prepend a
+// 4-byte CRC32 to the plaintext, then zero-pad up to a multiple of 4 bytes
+// (XXTEA word size), with an 8-byte floor (XXTEA requires n>=2 words).
+constexpr size_t xxtea_ciphertext_len(size_t payload_len) {
+  size_t needed = payload_len + 4;
+  if (needed < 8)
+    return 8;
+  return (needed + 3) & ~size_t{3};
+}
+
 enum class DecodeError : uint8_t {
   OK = 0,
   TOO_SHORT,
@@ -51,19 +84,33 @@ enum class DecodeError : uint8_t {
   BAD_VERSION,
   UNKNOWN_ENCODING,
   LENGTH_MISMATCH,
+  UNKNOWN_ENC_MODE,
+  CIPHERTEXT_TOO_SHORT,
 };
 
 struct DecodedPacket {
   uint32_t topic_crc;
   Encoding encoding;
+  EncMode enc_mode;
+  // Plaintext payload length declared by the sender. For EncMode::NONE this
+  // equals payload.size(); for EncMode::XXTEA this is the post-decrypt
+  // payload length (caller decrypts `payload` then takes the bytes at offset
+  // 4 .. 4 + plaintext_len).
+  uint16_t plaintext_len;
   // View into the caller-provided buffer. Valid as long as the buffer is.
+  // For EncMode::NONE this is the plaintext body. For EncMode::XXTEA this is
+  // the *ciphertext* (length is `xxtea_ciphertext_len(plaintext_len)`); the
+  // caller is responsible for in-place decryption and slicing.
   std::span<const uint8_t> payload;
 };
 
 // Write the header for a topic + payload of length `payload_len` to `out`.
 // Returns the number of bytes written (always HEADER_LEN). The payload bytes
-// must be appended by the caller.
-size_t encode_header(uint32_t topic_crc, Encoding encoding, uint16_t payload_len, uint8_t out[HEADER_LEN]);
+// must be appended by the caller. When `enc_mode != EncMode::NONE` the
+// caller-supplied `topic_crc` is ignored and bytes 4-7 are written as zero
+// (the real CRC32 must be carried in the ciphertext by the caller).
+size_t encode_header(uint32_t topic_crc, Encoding encoding, uint16_t payload_len, uint8_t out[HEADER_LEN],
+                     EncMode enc_mode = EncMode::NONE);
 
 // Parse `data` (a full datagram). Returns OK and fills `*out` on success,
 // otherwise leaves `*out` untouched and returns the specific failure reason.

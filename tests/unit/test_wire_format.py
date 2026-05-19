@@ -111,10 +111,15 @@ def test_length_mismatch_rejected() -> None:
         decode(bytes(pkt))
 
 
-def test_reserved_bytes_ignored_on_decode() -> None:
+def test_reserved_byte_11_ignored_on_decode() -> None:
+    # Byte 10 is now ENC_MODE (no longer fully reserved); byte 11 still is.
     pkt = bytearray(encode("t", b"hi"))
-    pkt[10] = 0xAB
     pkt[11] = 0xCD
     crc, encoding, body = decode(bytes(pkt))
     assert body == b"hi"
     assert encoding == ENCODING_RAW
+
+
+def test_plaintext_enc_mode_byte_is_zero() -> None:
+    pkt = encode("t", b"hi")
+    assert pkt[10] == 0x00

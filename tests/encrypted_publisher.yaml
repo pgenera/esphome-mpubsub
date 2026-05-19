@@ -1,0 +1,37 @@
+esphome:
+  name: pubsub-publisher-enc
+
+host:
+
+logger:
+  level: VERBOSE
+
+external_components:
+  - source:
+      type: local
+      path: ../components
+    components: [mpubsub]
+
+mpubsub:
+  port: 18512
+  scope: link-local
+  hops: 1
+  encryption:
+    key: "shared-test-secret"
+
+sensor:
+  - platform: template
+    id: source_temp
+    name: "Source Temperature"
+    lambda: 'return 20.0f + (millis() / 1000) % 10;'
+    update_interval: 1s
+  - platform: mpubsub
+    id: published_temp
+    topic: "test/temp"
+    name: "Published Temperature"
+    mode: publish
+
+interval:
+  - interval: 1s
+    then:
+      - lambda: 'id(published_temp).publish_state(id(source_temp).state);'

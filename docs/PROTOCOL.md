@@ -86,7 +86,7 @@ to compute it locally; the probe prints the group address as it starts.
 ```
  byte:  0    1    2    3    4    5    6    7    8    9   10   11   12 ...
        +----+----+----+----+----+----+----+----+----+----+----+----+----+
-       | 'M'| 'P'| VER| ENC|        TOPIC_CRC32         | PAY_LEN  | RSV | BODY ...
+       | 'M'| 'P'| VER| ENC|        TOPIC_CRC32         | PAY_LEN  |ENM | RSV | BODY ...
        +----+----+----+----+----+----+----+----+----+----+----+----+----+
 ```
 
@@ -97,10 +97,11 @@ Total: **12-byte header + up to 1220 bytes body = 1232-byte datagram.**
 |      0 |    2 | `MAGIC`      | ASCII `"MP"` (`0x4D 0x50`)                                     |
 |      2 |    1 | `VERSION`    | `0x01`                                                         |
 |      3 |    1 | `ENCODING`   | Body-encoding enum (see §3.1)                                  |
-|      4 |    4 | `TOPIC_CRC32`| Little-endian CRC-32/IEEE 802.3 of the UTF-8 topic string      |
-|      8 |    2 | `PAYLOAD_LEN`| Little-endian uint16; must equal `len(datagram) - 12`          |
-|     10 |    2 | `RESERVED`   | Senders MUST write `0x00 0x00`. Receivers MUST ignore.         |
-|     12 | ≤1220| `BODY`       | Encoding-dependent (see §3.1)                                  |
+|      4 |    4 | `TOPIC_CRC32`| Little-endian CRC-32/IEEE 802.3 of the UTF-8 topic string. When `ENC_MODE != 0` this field is zero and the real CRC lives in the ciphertext (see §3.3). |
+|      8 |    2 | `PAYLOAD_LEN`| Little-endian uint16; the **plaintext** payload length. For `ENC_MODE == 0` it equals `len(datagram) - 12`; for `ENC_MODE == 1` it is the user payload size and the on-wire body is longer (see §3.3). |
+|     10 |    1 | `ENC_MODE`   | Encryption mode enum (see §3.3). `0x00` = plaintext (default). |
+|     11 |    1 | `RESERVED`   | Senders MUST write `0x00`. Receivers MUST ignore.              |
+|     12 | ≤1220| `BODY`       | Encoding-dependent (see §3.1) and possibly XXTEA-encrypted (see §3.3). |
 
 ### 3.1 ENCODING byte and body layout
 
@@ -166,6 +167,61 @@ A 112-bit address hash plus a 32-bit topic CRC means a false positive
 requires colliding 144 bits, well above any conceivable network's
 collision floor.
 
+### 3.3 ENC_MODE byte and optional payload encryption
+
+Byte 10 is a 1-byte enum signalling whether the body has been encrypted:
+
+| Value      | Name     | Body layout                                                       |
+|-----------:|----------|-------------------------------------------------------------------|
+| `0x00`     | `NONE`   | Plaintext (default; the body is exactly the §3.1 layout).         |
+| `0x01`     | `XXTEA`  | XXTEA-256 ciphertext over `[TOPIC_CRC32 LE (4 bytes)] || plaintext payload`, zero-padded up to `max(8, roundup4(4 + PAYLOAD_LEN))` bytes (XXTEA requires n ≥ 2 32-bit words). |
+| `0x02..FF` | reserved | Receivers MUST drop.                                              |
+
+**Key derivation.** The 32-byte XXTEA-256 key is `SHA-256(passphrase)`,
+identical to the convention `packet_transport` uses for its
+`encryption.key` option. Configure once on every participating node:
+
+```yaml
+mpubsub:
+  encryption:
+    key: "any-length passphrase"
+```
+
+The C++ implementation reuses ESPHome's `esphome::xxtea::encrypt`/`decrypt`
+helpers (which `packet_transport` already vendored), so the on-wire bytes
+are byte-for-byte compatible with that algorithm.
+
+**Integrity check.** There is no separate MAC. The integrity tag is the
+`TOPIC_CRC32` carried at the start of the ciphertext: a wrong key produces
+a random 32-bit value that with probability `1 − 2⁻³²` won't match any
+subscribed topic, so the packet is silently dropped at dispatch (§4 rule
+6). The cleartext header's `TOPIC_CRC32` field (bytes 4–7) is forced to
+zero when `ENC_MODE != NONE` to avoid leaking the topic identity to a
+passive observer.
+
+**Mixed-mode deployments.** Receivers that have an encryption key
+configured accept both `ENC_MODE = NONE` and `ENC_MODE = XXTEA` packets —
+the decoder picks the path from the header byte. Receivers without a key
+configured drop encrypted packets.
+
+**Security caveats.** This scheme provides **confidentiality and weak
+integrity** within the threat model of "passive eavesdroppers and
+unkeyed attackers". It does **not** provide:
+
+* **Forward secrecy** — the key is long-lived; capture-now-decrypt-later
+  is feasible if the passphrase later leaks.
+* **Replay protection** — anyone holding the key can replay any captured
+  packet at will. If you need replay protection, embed a timestamp or
+  monotonic counter in the application payload and reject stale values.
+* **Strong authentication** — the topic CRC is a 32-bit tag and would be
+  trivial to forge by an attacker who knows the key. Treat encryption
+  as an obfuscation layer for adversaries off the L2 segment, not as a
+  full authenticated-encryption scheme.
+
+If any of those matter for your deployment, layer a real AEAD inside the
+payload (e.g. a libsodium `crypto_secretbox` blob in `RAW` mode) or run
+the protocol on an isolated/encrypted L2 (e.g. WireGuard).
+
 ## 4. Validation rules
 
 A receiver MUST silently drop a datagram (and SHOULD `ESP_LOGV` the
@@ -175,20 +231,23 @@ reason) if any of the following is true:
 2. `datagram[0..2] != b"MP"` — bad magic.
 3. `datagram[2] != 0x01` — unknown version.
 4. `datagram[3]` is not a known encoding value (`0x00` or `0x01`) — unknown encoding.
-5. `12 + PAYLOAD_LEN != len(datagram)` — length mismatch.
-6. `TOPIC_CRC32` matches none of the topics this node has subscribed to.
+5. `datagram[10]` is not a known ENC_MODE value (`0x00` or `0x01`) — unknown enc_mode.
+6. For `ENC_MODE == 0x00`: `12 + PAYLOAD_LEN != len(datagram)` — length mismatch.
+   For `ENC_MODE == 0x01`: `len(datagram) != 12 + max(8, roundup4(4 + PAYLOAD_LEN))` — ciphertext length mismatch.
+7. `ENC_MODE == 0x01` but no encryption key is configured on this receiver.
+8. The recovered `TOPIC_CRC32` (header field for plaintext, first 4 bytes of decrypted plaintext for encrypted) matches none of the topics this node has subscribed to.
 
 For `ENCODING == PROTOBUF` packets, the receiver additionally MUST
 drop the body if:
 
-7. `PAYLOAD_LEN < 2` — body too short to carry a `SCHEMA_ID`.
-8. The `SCHEMA_ID` doesn't match any typed subscriber on the topic.
+9. `PAYLOAD_LEN < 2` — body too short to carry a `SCHEMA_ID`.
+10. The `SCHEMA_ID` doesn't match any typed subscriber on the topic.
 
-The C++ implementation surfaces (1)–(5) as a `DecodeError` enum
+The C++ implementation surfaces (1)–(6) as a `DecodeError` enum
 (`TOO_SHORT`, `BAD_MAGIC`, `BAD_VERSION`, `UNKNOWN_ENCODING`,
-`LENGTH_MISMATCH`); (6)–(8) are post-decode filtering in
-`MulticastPubSub::deliver_`. See
-`components/mpubsub/wire_format.h`.
+`UNKNOWN_ENC_MODE`, `LENGTH_MISMATCH`, `CIPHERTEXT_TOO_SHORT`); (7)–(10)
+are post-decode filtering in `MulticastPubSub::on_packet_` /
+`MulticastPubSub::deliver_`. See `components/mpubsub/wire_format.h`.
 
 ## 5. Sender requirements
 
@@ -227,10 +286,14 @@ A subscriber MUST:
 The following are **not** part of this protocol revision. A v2 may add
 them; if so it will bump `VERSION` to `0x02`.
 
-* **Encryption / authentication.** A v1 datagram is unauthenticated. Any
-  node on the multicast scope can publish to any topic. If you need
-  authenticity, layer it inside the payload (signed messages, MAC) or run
-  the protocol on an isolated/encrypted L2 (e.g. WireGuard).
+* **Forward secrecy / replay protection.** The optional XXTEA-256 payload
+  encryption (§3.3) is a long-lived shared key with no rolling counter,
+  so an attacker who later learns the key can decrypt previously-captured
+  traffic, and anyone holding the key can replay captured packets at will.
+  For replay protection, embed a monotonic counter or timestamp in the
+  application payload and reject stale values. For full authenticated
+  encryption, layer a real AEAD inside the payload or run the protocol on
+  an isolated/encrypted L2 (e.g. WireGuard).
 * **MQTT-style wildcards.** Each subscription is one exact topic. Bridges
   (see [`examples/05_mqtt_bridge.yaml`](../examples/05_mqtt_bridge.yaml))
   can fan out wildcards on the broker side.
