@@ -12,6 +12,7 @@ from esphome.const import (
     CONF_DISABLED_BY_DEFAULT,
     CONF_ENTITY_CATEGORY,
     CONF_ID,
+    CONF_MQTT_ID,
     CONF_NAME,
     CONF_PAYLOAD,
     CONF_PORT,
@@ -375,20 +376,37 @@ async def to_code(config):
         ("packets_received", "set_packets_received_sensor"),
     ):
         s_id = ID(f"{parent_slug}_{slug}", is_declaration=True, type=esphome_sensor.Sensor)
-        s_config = esphome_sensor.sensor_schema(esphome_sensor.Sensor)(
-            {
-                CONF_ID: s_id,
-                CONF_NAME: slug.replace("_", " "),
-                CONF_ACCURACY_DECIMALS: 0,
-                CONF_STATE_CLASS: STATE_CLASS_TOTAL_INCREASING,
-                CONF_ENTITY_CATEGORY: ENTITY_CATEGORY_DIAGNOSTIC,
-                # Counters are diagnostics for tracking link health; default
-                # them off in HA so they don't clutter the UI for the common
-                # case of "I just want my sensor reading". Users can re-enable
-                # per-device when investigating loss / retransmit behavior.
-                CONF_DISABLED_BY_DEFAULT: True,
-            }
-        )
+        s_config = {
+            CONF_ID: s_id,
+            CONF_NAME: slug.replace("_", " "),
+            CONF_ACCURACY_DECIMALS: 0,
+            CONF_STATE_CLASS: STATE_CLASS_TOTAL_INCREASING,
+            CONF_ENTITY_CATEGORY: ENTITY_CATEGORY_DIAGNOSTIC,
+            # Counters are diagnostics for tracking link health; default
+            # them off in HA so they don't clutter the UI for the common
+            # case of "I just want my sensor reading". Users can re-enable
+            # per-device when investigating loss / retransmit behavior.
+            CONF_DISABLED_BY_DEFAULT: True,
+        }
+        # When `mqtt:` is in the global config the sensor schema would
+        # auto-generate a CONF_MQTT_ID via cv.OnlyWith(..., "mqtt").
+        # That auto-generation produces an empty id at codegen time
+        # (the validation-phase scan that normally populates
+        # CORE.component_ids has already run by the time we're here).
+        # Construct the id ourselves AND add it to CORE.component_ids
+        # so the downstream register_component(...) call inside
+        # setup_sensor_core_ -> register_mqtt_component sees it as a
+        # declared-but-not-yet-registered Component.
+        if "mqtt" in CORE.loaded_integrations:
+            from esphome.components import mqtt as _mqtt
+            mqtt_id = ID(
+                f"{parent_slug}_{slug}_mqtt",
+                is_declaration=True,
+                type=_mqtt.MQTTSensorComponent,
+            )
+            s_config[CONF_MQTT_ID] = mqtt_id
+            CORE.component_ids.add(mqtt_id.id)
+        s_config = esphome_sensor.sensor_schema(esphome_sensor.Sensor)(s_config)
         s_var = await esphome_sensor.new_sensor(s_config)
         cg.add(getattr(var, setter)(s_var))
 

@@ -22,7 +22,7 @@ template<typename... Ts> class PublishAction : public Action<Ts...> {
   // (subsequent publish() to the same topic supersedes it).
   TEMPLATABLE_VALUE(int16_t, retransmit_count)
 
-  void play(Ts... x) override {
+  void play(const Ts &...x) override {
     auto t = this->topic_.value(x...);
     auto p = this->payload_.value(x...);
     // Save/restore the component-level count around the publish call.

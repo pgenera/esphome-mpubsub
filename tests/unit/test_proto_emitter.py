@@ -320,7 +320,7 @@ def test_emits_publish_action_class() -> None:
     assert "TEMPLATABLE_VALUE(float, temperature)" in src
     assert "TEMPLATABLE_VALUE(std::string, room_id)" in src
     # play() builds the struct, assigns every field, publishes
-    assert "void play(Ts... x) override" in src
+    assert "void play(const Ts &...x) override" in src
     assert "m.temperature = this->temperature_.value(x...);" in src
     assert "m.room_id = this->room_id_.value(x...);" in src
     assert "this->parent_->publish(this->topic_.value(x...), m);" in src

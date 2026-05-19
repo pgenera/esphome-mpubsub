@@ -501,7 +501,7 @@ template<typename... Ts> class Publish{struct_name}Action
   TEMPLATABLE_VALUE(int16_t, retransmit_count)
 {action_setters}
 
-  void play(Ts... x) override {{
+  void play(const Ts &...x) override {{
     esphome::multicast_pubsub::messages::{struct_name} m;
 {action_assignments}
     // See PublishAction::play in automation.h for the save/restore rationale.
