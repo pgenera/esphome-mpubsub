@@ -1,4 +1,4 @@
-module github.com/pgenera/esphome-multicast/bridges/mqtt-go
+module github.com/pgenera/esphome-mpubsub/bridges/mqtt-go
 
 go 1.26.3
 
