@@ -14,17 +14,25 @@ import (
 // Bridge wires an MQTT client and a multicast_pubsub socket together
 // per the configured entries. Each entry is one-directional.
 type Bridge struct {
-	cfg     *Config
-	scope   Scope
-	mqtt    mqtt.Client
-	mcast   *MulticastSocket
+	cfg   *Config
+	scope Scope
+	mqtt  mqtt.Client
+	mcast *MulticastSocket
 
 	// crcToMQTT[topic_crc] = list of MQTT topic + QoS/retain to publish to
 	// when a multicast packet arrives with that CRC. Multiple entries are
 	// possible if the user configures more than one mqtt destination for
 	// the same mpubsub topic.
 	crcToMQTT map[uint32][]mpubsubToMQTTRoute
-	log       *slog.Logger
+
+	// indefiniteJobs holds a cancel channel per mpubsub topic that has an
+	// active indefinite-retransmit goroutine. Closing the channel signals
+	// the goroutine to exit; a new indefinite publish for the same topic
+	// closes the prior channel and installs a new one.
+	indefiniteMu   sync.Mutex
+	indefiniteJobs map[string]chan struct{}
+
+	log *slog.Logger
 }
 
 type mpubsubToMQTTRoute struct {
@@ -53,12 +61,13 @@ func NewBridge(cfg *Config, log *slog.Logger) (*Bridge, error) {
 	client := mqtt.NewClient(opts)
 
 	b := &Bridge{
-		cfg:       cfg,
-		scope:     scope,
-		mqtt:      client,
-		mcast:     sock,
-		crcToMQTT: make(map[uint32][]mpubsubToMQTTRoute),
-		log:       log,
+		cfg:            cfg,
+		scope:          scope,
+		mqtt:           client,
+		mcast:          sock,
+		crcToMQTT:      make(map[uint32][]mpubsubToMQTTRoute),
+		indefiniteJobs: make(map[string]chan struct{}),
+		log:            log,
 	}
 	return b, nil
 }
@@ -79,12 +88,20 @@ func (b *Bridge) Run(ctx context.Context) error {
 			h := func(_ mqtt.Client, msg mqtt.Message) {
 				b.handleMQTTMessage(e.MPubsubTopic, group, msg)
 			}
-			if token := b.mqtt.Subscribe(e.MQTTTopic, b.cfg.MQTT.QoS, h); token.Wait() && token.Error() != nil {
+			// MQTT delivers messages at min(publish_qos, subscribe_qos). To
+			// surface the publisher's QoS to promote_qos, we must subscribe
+			// at QoS 2 so the broker passes the original QoS through. When
+			// promote_qos is off, honor the user's configured subscribe QoS.
+			subQoS := b.cfg.MQTT.QoS
+			if b.cfg.MPubsub.PromoteQoS {
+				subQoS = 2
+			}
+			if token := b.mqtt.Subscribe(e.MQTTTopic, subQoS, h); token.Wait() && token.Error() != nil {
 				return token.Error()
 			}
 			b.log.Info("subscribed mqtt -> mpubsub",
 				"mqtt_topic", e.MQTTTopic, "mpubsub_topic", e.MPubsubTopic,
-				"group", group.String())
+				"sub_qos", subQoS, "group", group.String())
 		case DirMPubsubToMQTT:
 			if err := b.mcast.Join(group); err != nil {
 				return err
@@ -107,6 +124,14 @@ func (b *Bridge) Run(ctx context.Context) error {
 
 	<-ctx.Done()
 	b.log.Info("shutting down")
+	// Tell any indefinite-retransmit goroutines to exit before we tear
+	// down the multicast socket they're writing to.
+	b.indefiniteMu.Lock()
+	for topic, ch := range b.indefiniteJobs {
+		close(ch)
+		delete(b.indefiniteJobs, topic)
+	}
+	b.indefiniteMu.Unlock()
 	b.mcast.Close()
 	b.mqtt.Disconnect(250)
 	wg.Wait()
@@ -120,26 +145,60 @@ func (b *Bridge) handleMQTTMessage(mpubsubTopic string, group net.IP, msg mqtt.M
 			"mqtt_topic", msg.Topic(), "mpubsub_topic", mpubsubTopic, "err", err)
 		return
 	}
+	// Compute the effective retransmit_count for this message. The QoS
+	// promotion (if enabled) only ever raises the count; it never
+	// downgrades a config-level indefinite to finite.
+	count := b.effectiveRetransmitCount(msg.Qos())
+	// Any new publish to a topic supersedes a prior indefinite chain for
+	// that topic, even if the new publish is finite. Mirrors the C++ side.
+	b.cancelIndefinite(mpubsubTopic)
 	if err := b.mcast.SendTo(group, pkt); err != nil {
 		b.log.Warn("multicast send failed",
 			"mpubsub_topic", mpubsubTopic, "group", group.String(), "err", err)
 		return
 	}
 	b.log.Debug("mqtt -> mpubsub",
-		"mqtt_topic", msg.Topic(), "mpubsub_topic", mpubsubTopic, "bytes", len(msg.Payload()))
-	if b.cfg.MPubsub.RetransmitCount > 1 {
-		b.scheduleRetransmits(mpubsubTopic, group, pkt)
+		"mqtt_topic", msg.Topic(), "mpubsub_topic", mpubsubTopic,
+		"bytes", len(msg.Payload()), "qos", msg.Qos(), "retransmit_count", count)
+	if count == -1 {
+		b.startIndefinite(mpubsubTopic, group, pkt)
+	} else if count > 1 {
+		b.scheduleFiniteRetransmits(mpubsubTopic, group, pkt, count)
 	}
 }
 
-// scheduleRetransmits fires off (count - 1) additional sends of the same
-// pre-encoded datagram, spaced by the configured delay. Runs on its own
-// goroutine so the MQTT callback returns immediately; the first send has
-// already happened synchronously in handleMQTTMessage. delay = 0 is fine
-// (time.Sleep(0) returns immediately) but each iteration still yields, so
-// the loop won't starve other goroutines.
-func (b *Bridge) scheduleRetransmits(mpubsubTopic string, group net.IP, pkt []byte) {
-	count := b.cfg.MPubsub.RetransmitCount
+// effectiveRetransmitCount adapts the configured retransmit_count to the
+// incoming MQTT QoS when promote_qos is set. The mapping is "QoS bumps
+// the count up, never down" so an already-indefinite config stays
+// indefinite for QoS 0.
+func (b *Bridge) effectiveRetransmitCount(qos byte) int {
+	base := b.cfg.MPubsub.RetransmitCount
+	if !b.cfg.MPubsub.PromoteQoS {
+		return base
+	}
+	switch qos {
+	case 0:
+		return base
+	case 1:
+		if base == -1 {
+			return -1
+		}
+		if base < 3 {
+			return 3
+		}
+		return base
+	default: // 2 and any future MQTT5 values >= 2
+		return -1
+	}
+}
+
+// scheduleFiniteRetransmits fires off (count - 1) additional sends of the
+// same pre-encoded datagram, spaced by the configured delay. Runs on its
+// own goroutine so the MQTT callback returns immediately; the first send
+// has already happened synchronously. delay = 0 is fine (time.Sleep(0)
+// returns immediately) but each iteration still yields, so the loop
+// won't starve other goroutines.
+func (b *Bridge) scheduleFiniteRetransmits(mpubsubTopic string, group net.IP, pkt []byte, count int) {
 	delay := b.cfg.MPubsub.RetransmitDelay
 	go func() {
 		for i := 1; i < count; i++ {
@@ -154,6 +213,46 @@ func (b *Bridge) scheduleRetransmits(mpubsubTopic string, group net.IP, pkt []by
 			}
 		}
 	}()
+}
+
+// startIndefinite installs a per-topic goroutine that resends pkt at
+// the configured delay until its cancel channel is closed. Any prior
+// indefinite job for the same topic has already been cancelled by the
+// caller via cancelIndefinite().
+func (b *Bridge) startIndefinite(mpubsubTopic string, group net.IP, pkt []byte) {
+	delay := b.cfg.MPubsub.RetransmitDelay
+	cancel := make(chan struct{})
+	b.indefiniteMu.Lock()
+	b.indefiniteJobs[mpubsubTopic] = cancel
+	b.indefiniteMu.Unlock()
+	go func() {
+		ticker := time.NewTicker(delay)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-cancel:
+				return
+			case <-ticker.C:
+				if err := b.mcast.SendTo(group, pkt); err != nil {
+					b.log.Warn("multicast indefinite resend failed",
+						"mpubsub_topic", mpubsubTopic, "group", group.String(), "err", err)
+					// Keep looping -- a transient ENETUNREACH (interface
+					// briefly down) shouldn't end the chain.
+				}
+			}
+		}
+	}()
+}
+
+// cancelIndefinite stops the current indefinite-retransmit goroutine for
+// the topic, if any. Safe to call when no job is active.
+func (b *Bridge) cancelIndefinite(mpubsubTopic string) {
+	b.indefiniteMu.Lock()
+	defer b.indefiniteMu.Unlock()
+	if ch, ok := b.indefiniteJobs[mpubsubTopic]; ok {
+		close(ch)
+		delete(b.indefiniteJobs, mpubsubTopic)
+	}
 }
 
 func (b *Bridge) mcastReceiveLoop(ctx context.Context) {

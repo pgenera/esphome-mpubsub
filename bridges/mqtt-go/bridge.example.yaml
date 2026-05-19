@@ -16,8 +16,9 @@ multicast_pubsub:
   port: 18512
   scope: link-local          # link-local | site-local | organization-local
   hops: 1
-  retransmit_count: 1        # 1 = no retransmission
-  retransmit_delay: 100ms    # Go duration string; 0s supported
+  retransmit_count: 1        # 1 = no retransmission; -1 = indefinite (requires retransmit_delay >= 1s)
+  retransmit_delay: 100ms    # Go duration string; 0s supported for finite counts
+  promote_qos: false         # raise effective retransmit_count based on incoming MQTT QoS
   # interface: eth0          # optional; defaults to the kernel-picked egress
 
 bridges:

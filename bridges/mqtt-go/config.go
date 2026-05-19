@@ -35,14 +35,29 @@ type MPubsubConfig struct {
 	Interface string `yaml:"interface"` // default: kernel-picked
 
 	// RetransmitCount is the number of UDP datagrams emitted per logical
-	// publish (1 = no retransmission, the default). The first send is
-	// always synchronous; the rest are scheduled on a dedicated goroutine
-	// so the MQTT receive callback returns immediately.
+	// publish.
+	//   1   : no retransmission (default)
+	//   N>1 : send N packets total, (N-1) deferred on a goroutine
+	//   -1  : indefinite -- keep emitting at RetransmitDelay until
+	//         another publish for the same topic supersedes it. Requires
+	//         RetransmitDelay >= 1s (enforced at config time).
+	// The first send is always synchronous.
 	RetransmitCount int `yaml:"retransmit_count"`
 	// RetransmitDelay is the spacing between successive sends. Accepts
-	// any Go duration string (e.g. "100ms", "1s", "0s"). 0 is supported.
+	// any Go duration string (e.g. "100ms", "1s", "0s"). 0 is supported
+	// for finite counts; -1 (indefinite) requires >= 1s.
 	RetransmitDelayRaw string        `yaml:"retransmit_delay"`
 	RetransmitDelay    time.Duration `yaml:"-"`
+
+	// PromoteQoS adapts the effective retransmit_count based on the
+	// incoming MQTT message's QoS, on the theory that a QoS>0 publisher
+	// "cared more" about delivery and the UDP-multicast hop should
+	// reflect that:
+	//   QoS 0  → RetransmitCount  (unchanged)
+	//   QoS 1  → max(RetransmitCount, 3)
+	//   QoS 2  → -1 (indefinite, capped by the topic-supersede rule)
+	// Default false to keep behavior predictable.
+	PromoteQoS bool `yaml:"promote_qos"`
 }
 
 type BridgeEntry struct {
@@ -88,6 +103,8 @@ func (c *Config) applyDefaults() error {
 	if c.MPubsub.Hops == 0 {
 		c.MPubsub.Hops = 1
 	}
+	// Zero value (Go's int default) means "not set in YAML"; map to the
+	// real default of 1. validate() accepts 1..255 and -1.
 	if c.MPubsub.RetransmitCount == 0 {
 		c.MPubsub.RetransmitCount = 1
 	}
@@ -117,9 +134,15 @@ func (c *Config) validate() error {
 	if c.MPubsub.Hops < 1 || c.MPubsub.Hops > 255 {
 		return fmt.Errorf("multicast_pubsub.hops must be 1..255, got %d", c.MPubsub.Hops)
 	}
-	if c.MPubsub.RetransmitCount < 1 || c.MPubsub.RetransmitCount > 255 {
-		return fmt.Errorf("multicast_pubsub.retransmit_count must be 1..255, got %d",
+	if c.MPubsub.RetransmitCount != -1 &&
+		(c.MPubsub.RetransmitCount < 1 || c.MPubsub.RetransmitCount > 255) {
+		return fmt.Errorf("multicast_pubsub.retransmit_count must be 1..255 or -1 (indefinite); got %d",
 			c.MPubsub.RetransmitCount)
+	}
+	if c.MPubsub.RetransmitCount == -1 && c.MPubsub.RetransmitDelay < time.Second {
+		return fmt.Errorf(
+			"multicast_pubsub.retransmit_count: -1 (indefinite) requires retransmit_delay >= 1s; got %s",
+			c.MPubsub.RetransmitDelay)
 	}
 	if len(c.Bridges) == 0 {
 		return fmt.Errorf("at least one bridge entry is required")
