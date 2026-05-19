@@ -21,7 +21,7 @@ const (
 
 type MQTTConfig struct {
 	Broker   string `yaml:"broker"`    // e.g. tcp://broker:1883, ssl://broker:8883
-	ClientID string `yaml:"client_id"` // default "multicast-pubsub-bridge"
+	ClientID string `yaml:"client_id"` // default "mpubsub-bridge"
 	Username string `yaml:"username"`
 	Password string `yaml:"password"`
 	QoS      byte   `yaml:"qos"` // default 0
@@ -68,7 +68,7 @@ type BridgeEntry struct {
 
 type Config struct {
 	MQTT    MQTTConfig    `yaml:"mqtt"`
-	MPubsub MPubsubConfig `yaml:"multicast_pubsub"`
+	MPubsub MPubsubConfig `yaml:"mpubsub"`
 	Bridges []BridgeEntry `yaml:"bridges"`
 }
 
@@ -92,7 +92,7 @@ func LoadConfig(path string) (*Config, error) {
 
 func (c *Config) applyDefaults() error {
 	if c.MQTT.ClientID == "" {
-		c.MQTT.ClientID = "multicast-pubsub-bridge"
+		c.MQTT.ClientID = "mpubsub-bridge"
 	}
 	if c.MPubsub.Port == 0 {
 		c.MPubsub.Port = 18512
@@ -113,11 +113,11 @@ func (c *Config) applyDefaults() error {
 	} else {
 		d, err := time.ParseDuration(c.MPubsub.RetransmitDelayRaw)
 		if err != nil {
-			return fmt.Errorf("multicast_pubsub.retransmit_delay %q: %w",
+			return fmt.Errorf("mpubsub.retransmit_delay %q: %w",
 				c.MPubsub.RetransmitDelayRaw, err)
 		}
 		if d < 0 {
-			return fmt.Errorf("multicast_pubsub.retransmit_delay must be >= 0 (got %s)", d)
+			return fmt.Errorf("mpubsub.retransmit_delay must be >= 0 (got %s)", d)
 		}
 		c.MPubsub.RetransmitDelay = d
 	}
@@ -129,19 +129,19 @@ func (c *Config) validate() error {
 		return fmt.Errorf("mqtt.broker is required")
 	}
 	if _, err := ParseScope(c.MPubsub.Scope); err != nil {
-		return fmt.Errorf("multicast_pubsub.%w", err)
+		return fmt.Errorf("mpubsub.%w", err)
 	}
 	if c.MPubsub.Hops < 1 || c.MPubsub.Hops > 255 {
-		return fmt.Errorf("multicast_pubsub.hops must be 1..255, got %d", c.MPubsub.Hops)
+		return fmt.Errorf("mpubsub.hops must be 1..255, got %d", c.MPubsub.Hops)
 	}
 	if c.MPubsub.RetransmitCount != -1 &&
 		(c.MPubsub.RetransmitCount < 1 || c.MPubsub.RetransmitCount > 255) {
-		return fmt.Errorf("multicast_pubsub.retransmit_count must be 1..255 or -1 (indefinite); got %d",
+		return fmt.Errorf("mpubsub.retransmit_count must be 1..255 or -1 (indefinite); got %d",
 			c.MPubsub.RetransmitCount)
 	}
 	if c.MPubsub.RetransmitCount == -1 && c.MPubsub.RetransmitDelay < time.Second {
 		return fmt.Errorf(
-			"multicast_pubsub.retransmit_count: -1 (indefinite) requires retransmit_delay >= 1s; got %s",
+			"mpubsub.retransmit_count: -1 (indefinite) requires retransmit_delay >= 1s; got %s",
 			c.MPubsub.RetransmitDelay)
 	}
 	if len(c.Bridges) == 0 {

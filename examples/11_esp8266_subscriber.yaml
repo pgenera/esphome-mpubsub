@@ -1,7 +1,7 @@
 # Example 11 (ESP8266): subscriber.
 #
 # See `10_esp8266_publisher.yaml` for the platform notes -- the ESP8266
-# build of multicast_pubsub uses lwip's raw UDP/MLD6 API directly,
+# build of mpubsub uses lwip's raw UDP/MLD6 API directly,
 # enabled by `network: enable_ipv6: true`.
 
 esphome:
@@ -21,9 +21,9 @@ logger:
 
 external_components:
   - source: { type: local, path: ../components }
-    components: [multicast_pubsub]
+    components: [mpubsub]
 
-multicast_pubsub:
+mpubsub:
   scope: link-local
   on_message:
     - topic: "home/heartbeat"

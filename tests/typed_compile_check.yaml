@@ -12,7 +12,7 @@ host:
 logger:
   level: DEBUG
 
-# The api: component is required when multicast_pubsub.messages: is set
+# The api: component is required when mpubsub.messages: is set
 # (it provides the protobuf encoding primitives we generate code against).
 api:
 
@@ -20,9 +20,9 @@ external_components:
   - source:
       type: local
       path: ../components
-    components: [multicast_pubsub]
+    components: [mpubsub]
 
-multicast_pubsub:
+mpubsub:
   scope: link-local
   messages:
     - id: room_climate

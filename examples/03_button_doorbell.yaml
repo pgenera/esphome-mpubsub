@@ -21,9 +21,9 @@ logger:
 
 external_components:
   - source: { type: local, path: ../components }
-    components: [multicast_pubsub]
+    components: [mpubsub]
 
-multicast_pubsub:
+mpubsub:
   scope: link-local
 
 binary_sensor:
@@ -34,6 +34,6 @@ binary_sensor:
       inverted: true
     name: "Front Doorbell Button"
     on_press:
-      - multicast_pubsub.publish:
+      - mpubsub.publish:
           topic: "home/doorbell/front"
           payload: "ring"

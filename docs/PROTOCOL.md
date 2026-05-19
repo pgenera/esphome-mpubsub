@@ -1,10 +1,10 @@
 # Protocol specification (v1)
 
 This document is the authoritative wire-protocol reference for
-`multicast_pubsub`. The Python reference implementation in
+`mpubsub`. The Python reference implementation in
 [`tests/unit/reference.py`](../tests/unit/reference.py) is the executable
 ground truth; the C++ implementation in
-[`components/multicast_pubsub/`](../components/multicast_pubsub/) is verified
+[`components/mpubsub/`](../components/mpubsub/) is verified
 to match it byte-for-byte by [`tests/unit/test_topic_hash_cpp.py`](../tests/unit/test_topic_hash_cpp.py)
 and [`tests/unit/test_wire_format_cpp.py`](../tests/unit/test_wire_format_cpp.py).
 
@@ -188,14 +188,14 @@ The C++ implementation surfaces (1)–(5) as a `DecodeError` enum
 (`TOO_SHORT`, `BAD_MAGIC`, `BAD_VERSION`, `UNKNOWN_ENCODING`,
 `LENGTH_MISMATCH`); (6)–(8) are post-decode filtering in
 `MulticastPubSub::deliver_`. See
-`components/multicast_pubsub/wire_format.h`.
+`components/mpubsub/wire_format.h`.
 
 ## 5. Sender requirements
 
 A publisher MUST:
 
 * Reject a payload larger than **1220 bytes**. The Python codegen for the
-  `multicast_pubsub.publish:` action rejects literal payloads above that
+  `mpubsub.publish:` action rejects literal payloads above that
   size at config time. The runtime rejects oversize lambda payloads at
   `publish()` time and logs an `ERROR`.
 * Set `ENCODING` to one of the defined values (`0x00 = RAW`, `0x01 =

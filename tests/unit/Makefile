@@ -1,4 +1,4 @@
-# Builds standalone C++ test binaries for the multicast_pubsub component.
+# Builds standalone C++ test binaries for the mpubsub component.
 # Used by tests/unit/test_topic_hash_cpp.py and test_wire_format_cpp.py.
 
 CXX ?= g++
@@ -6,7 +6,7 @@ CXXFLAGS ?= -std=gnu++20 -O0 -g -Wall -Wextra -Wno-unused-parameter
 # Sanitizer flags applied to *_san binaries to catch UB / OOB during fuzzing.
 SAN_FLAGS := -fsanitize=address,undefined -fno-omit-frame-pointer
 
-COMP := ../../components/multicast_pubsub
+COMP := ../../components/mpubsub
 
 .PHONY: all clean
 all: topic_hash_test wire_format_test wire_format_test_san topic_hash_test_san

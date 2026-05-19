@@ -1,7 +1,7 @@
 """Pure-Python tests of the topic-hash & CRC reference implementation.
 
 These nail down the spec: the SHA-256 + scope nibble layout described in
-``README.md`` and ``components/multicast_pubsub/topic_hash.{h,cpp}``.
+``README.md`` and ``components/mpubsub/topic_hash.{h,cpp}``.
 """
 
 from __future__ import annotations

@@ -1,7 +1,7 @@
 # mqtt-pubsub-bridge
 
 A standalone Go daemon that mirrors messages between an MQTT broker and the
-`multicast_pubsub` IPv6 multicast fabric. Useful when:
+`mpubsub` IPv6 multicast fabric. Useful when:
 
 - you have an existing MQTT-based deployment and want to expose those topics
   to multicast-only ESPHome devices, or
@@ -30,25 +30,25 @@ See [`bridge.example.yaml`](bridge.example.yaml) for the config shape.
 | Section | Key | Default | Meaning |
 |---------|-----|---------|---------|
 | `mqtt` | `broker` | — | Required. `tcp://host:1883`, `ssl://host:8883`, `ws://...`, etc. |
-| `mqtt` | `client_id` | `multicast-pubsub-bridge` | Stable id helps reconnect logic on the broker. |
+| `mqtt` | `client_id` | `mpubsub-bridge` | Stable id helps reconnect logic on the broker. |
 | `mqtt` | `username` / `password` | — | Optional credentials. |
 | `mqtt` | `qos` | `0` | QoS for both subscribed and published MQTT topics. |
 | `mqtt` | `retain` | `false` | Retain flag for messages bridged into MQTT. |
-| `multicast_pubsub` | `port` | `18512` | Must match the ESPHome devices. |
-| `multicast_pubsub` | `scope` | `link-local` | `link-local` / `site-local` / `organization-local`. |
-| `multicast_pubsub` | `hops` | `1` | Outgoing `IPV6_MULTICAST_HOPS`. |
-| `multicast_pubsub` | `retransmit_count` | `1` | Number of UDP datagrams emitted per logical publish. `1` = no retransmission. First send is synchronous; the rest run on a per-publish goroutine. **`-1`** = indefinite: keep retransmitting at `retransmit_delay` until another publish for the same topic supersedes it (requires `retransmit_delay >= 1s`). |
-| `multicast_pubsub` | `retransmit_delay` | `100ms` | Spacing between successive sends. Go duration string (`"100ms"`, `"1s"`, `"0s"`). `0` supported for finite counts. |
-| `multicast_pubsub` | `promote_qos` | `false` | When true, the incoming MQTT QoS bumps the effective retransmit_count: QoS 0 unchanged, QoS 1 → `max(retransmit_count, 3)`, QoS 2 → `-1` (indefinite). |
-| `multicast_pubsub` | `interface` | (kernel default) | Egress interface name (`eth0`, `br-lan`, …). |
+| `mpubsub` | `port` | `18512` | Must match the ESPHome devices. |
+| `mpubsub` | `scope` | `link-local` | `link-local` / `site-local` / `organization-local`. |
+| `mpubsub` | `hops` | `1` | Outgoing `IPV6_MULTICAST_HOPS`. |
+| `mpubsub` | `retransmit_count` | `1` | Number of UDP datagrams emitted per logical publish. `1` = no retransmission. First send is synchronous; the rest run on a per-publish goroutine. **`-1`** = indefinite: keep retransmitting at `retransmit_delay` until another publish for the same topic supersedes it (requires `retransmit_delay >= 1s`). |
+| `mpubsub` | `retransmit_delay` | `100ms` | Spacing between successive sends. Go duration string (`"100ms"`, `"1s"`, `"0s"`). `0` supported for finite counts. |
+| `mpubsub` | `promote_qos` | `false` | When true, the incoming MQTT QoS bumps the effective retransmit_count: QoS 0 unchanged, QoS 1 → `max(retransmit_count, 3)`, QoS 2 → `-1` (indefinite). |
+| `mpubsub` | `interface` | (kernel default) | Egress interface name (`eth0`, `br-lan`, …). |
 | `bridges[]` | `direction` | — | `mqtt_to_mpubsub` or `mpubsub_to_mqtt`. One-directional. |
 | `bridges[]` | `mqtt_topic` | — | The MQTT topic to subscribe to (mqtt→mpubsub) or publish to (mpubsub→mqtt). |
-| `bridges[]` | `mpubsub_topic` | — | The multicast_pubsub topic. |
+| `bridges[]` | `mpubsub_topic` | — | The mpubsub topic. |
 
 ## Notes
 
 - **Wire format**: this binary embeds a Go reimplementation of the same wire
-  format used by the C++ component (`components/multicast_pubsub/`) and the
+  format used by the C++ component (`components/mpubsub/`) and the
   Python reference (`tests/unit/reference.py`). If you change one, change all
   three.
 - **Encoding**: outgoing packets are sent as `ENCODING=RAW` (opaque MQTT

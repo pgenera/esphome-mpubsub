@@ -28,7 +28,7 @@ api:
 
 external_components:
   - source: { type: local, path: ../components }
-    components: [multicast_pubsub]
+    components: [mpubsub]
 
 mqtt:
   broker: !secret mqtt_broker
@@ -63,7 +63,7 @@ mqtt:
                 RoomClimate::SCHEMA_ID,
                 m.bytes());
 
-multicast_pubsub:
+mpubsub:
   id: pubsub
   scope: link-local
   messages:

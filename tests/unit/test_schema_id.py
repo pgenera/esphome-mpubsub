@@ -14,9 +14,9 @@ from pathlib import Path
 import pytest
 
 # Make the component's proto_emitter module importable -- it lives outside
-# the standard sys.path under components/multicast_pubsub/.
+# the standard sys.path under components/mpubsub/.
 HERE = Path(__file__).resolve().parent
-COMPONENT = HERE.parents[1] / "components" / "multicast_pubsub"
+COMPONENT = HERE.parents[1] / "components" / "mpubsub"
 sys.path.insert(0, str(COMPONENT))
 
 from proto_emitter import (  # noqa: E402

@@ -9,7 +9,7 @@
 #include <iostream>
 #include <string>
 
-#include "../../components/multicast_pubsub/topic_hash.h"
+#include "../../components/mpubsub/topic_hash.h"
 
 using namespace esphome::multicast_pubsub;
 

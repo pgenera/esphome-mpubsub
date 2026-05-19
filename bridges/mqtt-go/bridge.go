@@ -11,7 +11,7 @@ import (
 	mqtt "github.com/eclipse/paho.mqtt.golang"
 )
 
-// Bridge wires an MQTT client and a multicast_pubsub socket together
+// Bridge wires an MQTT client and a mpubsub socket together
 // per the configured entries. Each entry is one-directional.
 type Bridge struct {
 	cfg   *Config

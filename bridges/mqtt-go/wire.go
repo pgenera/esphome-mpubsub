@@ -1,5 +1,5 @@
-// Wire-format primitives for multicast_pubsub. Mirrors
-// components/multicast_pubsub/{topic_hash,wire_format}.{h,cpp} and the
+// Wire-format primitives for mpubsub. Mirrors
+// components/mpubsub/{topic_hash,wire_format}.{h,cpp} and the
 // Python reference at tests/unit/reference.py. Keep these three in lockstep.
 package main
 
@@ -46,7 +46,7 @@ func ParseScope(s string) (Scope, error) {
 }
 
 // TopicToGroup derives the IPv6 multicast group for a topic. Matches
-// components/multicast_pubsub/topic_hash.cpp byte-for-byte.
+// components/mpubsub/topic_hash.cpp byte-for-byte.
 func TopicToGroup(topic string, scope Scope) net.IP {
 	digest := sha256.Sum256([]byte(topic))
 	addr := make(net.IP, 16)

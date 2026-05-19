@@ -19,9 +19,9 @@ wifi:
 
 external_components:
   - source: { type: local, path: ../components }
-    components: [multicast_pubsub]
+    components: [mpubsub]
 
-multicast_pubsub:
+mpubsub:
   scope: link-local
 
 # When the vacuum finishes (driven by hardware logic not shown), publish:
@@ -30,13 +30,13 @@ binary_sensor:
     pin: GPIO34
     name: "Vacuum Done Signal"
     on_press:
-      - multicast_pubsub.publish:
+      - mpubsub.publish:
           topic: "home/vacuum/status"
           payload: "done"
 
 # --- robot-mop.yaml would have ---
 #
-# multicast_pubsub:
+# mpubsub:
 #   scope: link-local
 #   on_message:
 #     - topic: "home/vacuum/status"

@@ -20,9 +20,9 @@ logger:
 
 external_components:
   - source: { type: local, path: ../components }
-    components: [multicast_pubsub]
+    components: [mpubsub]
 
-multicast_pubsub:
+mpubsub:
   scope: link-local
 
 sensor:
@@ -33,14 +33,14 @@ sensor:
       id: dht_temp
       name: "Bedroom Temperature"
       on_value:
-        - multicast_pubsub.publish:
+        - mpubsub.publish:
             topic: "home/bedroom/temperature"
             payload: !lambda 'return esphome::str_sprintf("%.2f", x);'
     humidity:
       id: dht_humidity
       name: "Bedroom Humidity"
       on_value:
-        - multicast_pubsub.publish:
+        - mpubsub.publish:
             topic: "home/bedroom/humidity"
             payload: !lambda 'return esphome::str_sprintf("%.1f", x);'
     update_interval: 30s

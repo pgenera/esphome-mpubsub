@@ -20,7 +20,7 @@ logger:
 
 external_components:
   - source: { type: local, path: ../components }
-    components: [multicast_pubsub]
+    components: [mpubsub]
 
 output:
   - platform: ledc
@@ -31,7 +31,7 @@ rtttl:
   output: buzzer_out
   id: doorbell_tune
 
-multicast_pubsub:
+mpubsub:
   scope: link-local
   on_message:
     - topic: "home/doorbell/front"

@@ -68,7 +68,7 @@ SCOPES = {
     "organization-local": Scope.ORG_LOCAL,
 }
 
-# Mirrors components/multicast_pubsub/wire_format.h. Hard cap.
+# Mirrors components/mpubsub/wire_format.h. Hard cap.
 # IPv6 minimum MTU (1280, RFC 8200 §5) minus IPv6 header (40) minus UDP
 # header (8) = 1232 bytes deliverable on any IPv6 link without fragmentation.
 MAX_DATAGRAM = 1232
@@ -277,7 +277,7 @@ def _final_validate(config):
         full = fv.full_config.get()
         if "api" not in full:
             raise cv.Invalid(
-                "multicast_pubsub `messages:` requires the `api:` component to "
+                "mpubsub `messages:` requires the `api:` component to "
                 "be configured (used for protobuf encoding primitives). Add an "
                 "`api:` section to your YAML, or remove the `messages:` block "
                 "to stick to raw payloads.",
@@ -419,7 +419,7 @@ async def to_code(config):
 
 
 def _publish_action_mode_validator(config: dict) -> dict:
-    """Enforce that a multicast_pubsub.publish action is either raw
+    """Enforce that a mpubsub.publish action is either raw
     (`payload:` only) or typed (`message:` + `values:`), never both
     and never neither.
     """
@@ -427,18 +427,18 @@ def _publish_action_mode_validator(config: dict) -> dict:
     has_message = CONF_MESSAGE in config
     if has_payload and has_message:
         raise cv.Invalid(
-            "multicast_pubsub.publish: `payload:` and `message:` are mutually "
+            "mpubsub.publish: `payload:` and `message:` are mutually "
             "exclusive -- pick one. Use `payload:` for opaque bytes, or "
             "`message: + values:` for a typed protobuf message."
         )
     if not has_payload and not has_message:
         raise cv.Invalid(
-            "multicast_pubsub.publish requires either `payload:` (raw mode) "
+            "mpubsub.publish requires either `payload:` (raw mode) "
             "or `message: + values:` (typed mode)."
         )
     if has_message and CONF_VALUES not in config:
         raise cv.Invalid(
-            "multicast_pubsub.publish with `message:` requires a `values:` "
+            "mpubsub.publish with `message:` requires a `values:` "
             "mapping (use `values: {}` to publish a fully-default message)."
         )
     return config
@@ -479,7 +479,7 @@ def _publish_action_class(msg_id: str):
 
 
 @automation.register_action(
-    "multicast_pubsub.publish",
+    "mpubsub.publish",
     PublishAction,
     PUBLISH_ACTION_SCHEMA,
     synchronous=True,
@@ -511,8 +511,8 @@ async def publish_action_to_code(config, action_id, template_arg, args):
     schema = _lookup_message_schema(msg_id)
     if schema is None:
         raise cv.Invalid(
-            f"multicast_pubsub.publish references unknown message {msg_id!r}. "
-            f"Declare it under `multicast_pubsub.messages:` or pick a "
+            f"mpubsub.publish references unknown message {msg_id!r}. "
+            f"Declare it under `mpubsub.messages:` or pick a "
             f"different message id.",
             path=[CONF_MESSAGE],
         )

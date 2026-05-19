@@ -22,14 +22,14 @@ logger:
 
 external_components:
   - source: { type: local, path: ../components }
-    components: [multicast_pubsub]
+    components: [mpubsub]
 
-multicast_pubsub:
+mpubsub:
   scope: link-local
 
 # Receive the temperature as a plain sensor (default mode is subscribe).
 sensor:
-  - platform: multicast_pubsub
+  - platform: mpubsub
     topic: "home/bedroom/temperature"
     id: remote_temp
     name: "Bedroom Temperature (received)"

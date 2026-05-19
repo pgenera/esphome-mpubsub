@@ -41,7 +41,7 @@ import pytest
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
-sys.path.insert(0, str(HERE.parents[1] / "components" / "multicast_pubsub"))
+sys.path.insert(0, str(HERE.parents[1] / "components" / "mpubsub"))
 
 from reference import (
     ENCODING_PROTOBUF,

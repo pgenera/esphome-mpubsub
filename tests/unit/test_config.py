@@ -46,7 +46,7 @@ def _wrap(body: str) -> str:
         "  - source:\n"
         "      type: local\n"
         f"      path: {REPO}/components\n"
-        "    components: [multicast_pubsub]\n"
+        "    components: [mpubsub]\n"
         + body
     )
 
@@ -56,30 +56,30 @@ def _wrap(body: str) -> str:
     ["link-local", "site-local", "organization-local"],
 )
 def test_accepts_all_scopes(tmp_path: Path, scope: str) -> None:
-    r = _esphome_config(_wrap(f"multicast_pubsub:\n  scope: {scope}\n"), tmp_path)
+    r = _esphome_config(_wrap(f"mpubsub:\n  scope: {scope}\n"), tmp_path)
     assert "Configuration is valid" in (r.stdout + r.stderr), r.stdout + r.stderr
 
 
 def test_rejects_invalid_scope(tmp_path: Path) -> None:
-    r = _esphome_config(_wrap("multicast_pubsub:\n  scope: planet-local\n"), tmp_path)
+    r = _esphome_config(_wrap("mpubsub:\n  scope: planet-local\n"), tmp_path)
     assert r.returncode != 0
     assert "scope" in (r.stdout + r.stderr).lower()
 
 
 def test_rejects_invalid_port(tmp_path: Path) -> None:
-    r = _esphome_config(_wrap("multicast_pubsub:\n  port: 99999\n"), tmp_path)
+    r = _esphome_config(_wrap("mpubsub:\n  port: 99999\n"), tmp_path)
     assert r.returncode != 0
 
 
 def test_rejects_invalid_hops(tmp_path: Path) -> None:
-    r = _esphome_config(_wrap("multicast_pubsub:\n  hops: 0\n"), tmp_path)
+    r = _esphome_config(_wrap("mpubsub:\n  hops: 0\n"), tmp_path)
     assert r.returncode != 0
 
 
 def test_rejects_empty_topic_on_message(tmp_path: Path) -> None:
     body = textwrap.dedent(
         """\
-        multicast_pubsub:
+        mpubsub:
           on_message:
             - topic: ""
               then:
@@ -93,7 +93,7 @@ def test_rejects_empty_topic_on_message(tmp_path: Path) -> None:
 def test_rejects_oversize_topic_on_message(tmp_path: Path) -> None:
     body = textwrap.dedent(
         f"""\
-        multicast_pubsub:
+        mpubsub:
           on_message:
             - topic: "{'x' * 201}"
               then:
@@ -109,7 +109,7 @@ def test_rejects_oversize_static_payload(tmp_path: Path) -> None:
     # known publish payloads above it at config time, before the device boots.
     big = "x" * 1221
     body = (
-        "multicast_pubsub:\n"
+        "mpubsub:\n"
         "  id: pubsub\n"
         "sensor:\n"
         "  - platform: template\n"
@@ -117,7 +117,7 @@ def test_rejects_oversize_static_payload(tmp_path: Path) -> None:
         "    lambda: 'return 1.0;'\n"
         "    update_interval: never\n"
         "    on_value:\n"
-        "      - multicast_pubsub.publish:\n"
+        "      - mpubsub.publish:\n"
         "          topic: \"test/v\"\n"
         f"          payload: \"{big}\"\n"
     )
@@ -131,7 +131,7 @@ def test_accepts_max_size_static_payload(tmp_path: Path) -> None:
     # Exactly MAX_PAYLOAD bytes (1220) must still validate.
     payload = "x" * 1220
     body = (
-        "multicast_pubsub:\n"
+        "mpubsub:\n"
         "  id: pubsub\n"
         "sensor:\n"
         "  - platform: template\n"
@@ -139,7 +139,7 @@ def test_accepts_max_size_static_payload(tmp_path: Path) -> None:
         "    lambda: 'return 1.0;'\n"
         "    update_interval: never\n"
         "    on_value:\n"
-        "      - multicast_pubsub.publish:\n"
+        "      - mpubsub.publish:\n"
         "          topic: \"test/v\"\n"
         f"          payload: \"{payload}\"\n"
     )
@@ -149,7 +149,7 @@ def test_accepts_max_size_static_payload(tmp_path: Path) -> None:
 
 def test_rejects_publish_with_both_payload_and_message(tmp_path: Path) -> None:
     body = (
-        "multicast_pubsub:\n"
+        "mpubsub:\n"
         "  id: pubsub\n"
         "  messages:\n"
         "    - id: m\n"
@@ -162,7 +162,7 @@ def test_rejects_publish_with_both_payload_and_message(tmp_path: Path) -> None:
         "    lambda: 'return 1.0;'\n"
         "    update_interval: never\n"
         "    on_value:\n"
-        "      - multicast_pubsub.publish:\n"
+        "      - mpubsub.publish:\n"
         "          topic: \"t\"\n"
         "          payload: \"x\"\n"
         "          message: m\n"
@@ -175,7 +175,7 @@ def test_rejects_publish_with_both_payload_and_message(tmp_path: Path) -> None:
 
 def test_rejects_publish_with_neither_payload_nor_message(tmp_path: Path) -> None:
     body = (
-        "multicast_pubsub:\n"
+        "mpubsub:\n"
         "  id: pubsub\n"
         "sensor:\n"
         "  - platform: template\n"
@@ -183,7 +183,7 @@ def test_rejects_publish_with_neither_payload_nor_message(tmp_path: Path) -> Non
         "    lambda: 'return 1.0;'\n"
         "    update_interval: never\n"
         "    on_value:\n"
-        "      - multicast_pubsub.publish:\n"
+        "      - mpubsub.publish:\n"
         "          topic: \"t\"\n"
     )
     r = _esphome_config(_wrap(body), tmp_path)
@@ -194,7 +194,7 @@ def test_rejects_publish_with_neither_payload_nor_message(tmp_path: Path) -> Non
 
 def test_rejects_publish_with_message_but_no_values(tmp_path: Path) -> None:
     body = (
-        "multicast_pubsub:\n"
+        "mpubsub:\n"
         "  id: pubsub\n"
         "  messages:\n"
         "    - id: m\n"
@@ -207,7 +207,7 @@ def test_rejects_publish_with_message_but_no_values(tmp_path: Path) -> None:
         "    lambda: 'return 1.0;'\n"
         "    update_interval: never\n"
         "    on_value:\n"
-        "      - multicast_pubsub.publish:\n"
+        "      - mpubsub.publish:\n"
         "          topic: \"t\"\n"
         "          message: m\n"
     )
@@ -221,10 +221,10 @@ def test_rejects_sensor_mode_both(tmp_path: Path) -> None:
     creates an infinite loop via IPV6_MULTICAST_LOOP. Use two distinct
     topics or split publishes and subscribes across devices."""
     body = (
-        "multicast_pubsub:\n"
+        "mpubsub:\n"
         "  id: pubsub\n"
         "sensor:\n"
-        "  - platform: multicast_pubsub\n"
+        "  - platform: mpubsub\n"
         "    topic: \"loop/test\"\n"
         "    name: \"Loop Test\"\n"
         "    mode: both\n"
@@ -237,7 +237,7 @@ def test_rejects_sensor_mode_both(tmp_path: Path) -> None:
 
 def test_accepts_publish_typed_in_automation(tmp_path: Path) -> None:
     body = (
-        "multicast_pubsub:\n"
+        "mpubsub:\n"
         "  id: pubsub\n"
         "  messages:\n"
         "    - id: room_climate\n"
@@ -251,7 +251,7 @@ def test_accepts_publish_typed_in_automation(tmp_path: Path) -> None:
         "    lambda: 'return 1.0;'\n"
         "    update_interval: never\n"
         "    on_value:\n"
-        "      - multicast_pubsub.publish:\n"
+        "      - mpubsub.publish:\n"
         "          topic: \"home/climate\"\n"
         "          message: room_climate\n"
         "          values:\n"
@@ -265,7 +265,7 @@ def test_accepts_publish_typed_in_automation(tmp_path: Path) -> None:
 def test_accepts_publish_action_in_automation(tmp_path: Path) -> None:
     body = textwrap.dedent(
         """\
-        multicast_pubsub:
+        mpubsub:
           id: pubsub
         sensor:
           - platform: template
@@ -273,7 +273,7 @@ def test_accepts_publish_action_in_automation(tmp_path: Path) -> None:
             lambda: 'return 1.0;'
             update_interval: never
             on_value:
-              - multicast_pubsub.publish:
+              - mpubsub.publish:
                   topic: "test/v"
                   payload: !lambda 'return "1";'
         """

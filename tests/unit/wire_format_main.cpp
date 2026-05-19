@@ -16,7 +16,7 @@
 #include <string>
 #include <vector>
 
-#include "../../components/multicast_pubsub/wire_format.h"
+#include "../../components/mpubsub/wire_format.h"
 
 using namespace esphome::multicast_pubsub;
 

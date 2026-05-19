@@ -1,4 +1,4 @@
-# Example config for the MQTT <-> multicast_pubsub bridge.
+# Example config for the MQTT <-> mpubsub bridge.
 #
 # Each entry under bridges: is one-directional. To mirror a topic both ways,
 # declare two entries (with different mqtt_topic/mpubsub_topic names to avoid
@@ -6,13 +6,13 @@
 
 mqtt:
   broker: tcp://127.0.0.1:1883
-  client_id: multicast-pubsub-bridge
+  client_id: mpubsub-bridge
   # username: optional
   # password: optional
   qos: 0
   retain: false
 
-multicast_pubsub:
+mpubsub:
   port: 18512
   scope: link-local          # link-local | site-local | organization-local
   hops: 1

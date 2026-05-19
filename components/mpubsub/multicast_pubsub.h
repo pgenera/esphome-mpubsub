@@ -145,7 +145,7 @@ class MulticastPubSub : public Component {
   ///       .perform();
   ///
   /// `T` must be a generated message struct (one of the entries under
-  /// `multicast_pubsub.messages:` in YAML).
+  /// `mpubsub.messages:` in YAML).
   template<typename T> typename T::Call make_call(const std::string &topic) {
     return typename T::Call(this, topic);
   }

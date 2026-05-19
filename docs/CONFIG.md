@@ -1,9 +1,9 @@
 # YAML configuration reference
 
-## `multicast_pubsub:` — top-level component
+## `mpubsub:` — top-level component
 
 ```yaml
-multicast_pubsub:
+mpubsub:
   id: my_pubsub                 # optional, only needed if you have multiple instances
   port: 18512                   # uint16, default 18512
   scope: link-local             # link-local | site-local | organization-local
@@ -34,14 +34,14 @@ multicast_pubsub:
 | `messages`   | no       | list     | empty         | Typed protobuf message schemas. Each entry generates a C++ struct named after `id` (PascalCase). Requires `api:` to also be configured (we use its protobuf primitives). |
 
 The component is `MULTI_CONF`-friendly: you can declare two
-`multicast_pubsub:` blocks with different `port:` values to keep separate
+`mpubsub:` blocks with different `port:` values to keep separate
 fabrics on the same device.
 
-## `multicast_pubsub.publish:` — action
+## `mpubsub.publish:` — action
 
 ```yaml
 on_...:
-  - multicast_pubsub.publish:
+  - mpubsub.publish:
       id: my_pubsub              # optional, only with multiple instances
       topic: "home/temp"
       payload: !lambda 'return std::to_string(x);'
@@ -49,7 +49,7 @@ on_...:
 
 | Key       | Required | Type             | Notes                                                                                  |
 |-----------|:--------:|------------------|----------------------------------------------------------------------------------------|
-| `id`      | no       | id               | Pick a specific `multicast_pubsub:` instance.                                          |
+| `id`      | no       | id               | Pick a specific `mpubsub:` instance.                                          |
 | `topic`   | yes      | templatable str  | UTF-8, non-empty, ≤200 bytes, no NUL.                                                  |
 | `payload` | yes      | templatable str  | Raw bytes-as-string. Maximum 1220 bytes; literals over the limit are rejected at config time. |
 | `retransmit_count` | no | templatable int 1–255 or `-1` | Override the component-level `retransmit_count` for this one publish. Useful for "critical" messages (door open/close, alarm trips) that warrant more aggressive resending without raising the global rate. `-1` activates indefinite mode for the topic; a subsequent publish to the same topic ends it. The component-level `retransmit_delay` is used either way -- the per-action override doesn't carry its own delay. |
@@ -63,9 +63,9 @@ two forms are mutually exclusive — pick one per action.
 
 ```yaml
 on_value:
-  - multicast_pubsub.publish:
+  - mpubsub.publish:
       topic: "home/garage/climate"
-      message: room_climate           # references multicast_pubsub.messages:
+      message: room_climate           # references mpubsub.messages:
       values:
         temperature: !lambda 'return x;'
         humidity: !lambda 'return id(humidity).state;'
@@ -74,7 +74,7 @@ on_value:
 
 | Key       | Required | Type                          | Notes                                                                                              |
 |-----------|:--------:|-------------------------------|----------------------------------------------------------------------------------------------------|
-| `message` | yes      | id                            | A messages: entry id declared on a `multicast_pubsub:` instance in the same config.                |
+| `message` | yes      | id                            | A messages: entry id declared on a `mpubsub:` instance in the same config.                |
 | `values`  | yes      | mapping `field → templatable` | One entry per field. Missing fields default to zero/empty. Unknown field names fail config-validation. |
 | `retransmit_count` | no | templatable int 1–255 or `-1` | Per-publish override of the component-level `retransmit_count`, same semantics as the raw-publish form (including `-1` for indefinite mode). |
 
@@ -100,12 +100,12 @@ For everything beyond what the YAML form covers (nested dynamic
 messages, schemaless `DynamicMessage`, the underlying `publish<T>`
 template, `make_call<T>`, etc.) see [`CXX_API.md`](CXX_API.md).
 
-## `multicast_pubsub:` -> `on_message:` triggers
+## `mpubsub:` -> `on_message:` triggers
 
 Two flavors, distinguished by whether `message:` is set:
 
 ```yaml
-multicast_pubsub:
+mpubsub:
   on_message:
     # Raw subscribe: x is std::vector<uint8_t>
     - topic: "home/vacuum/done"
@@ -133,12 +133,12 @@ separate `on_message:` entries. The runtime dispatch checks each
 packet's encoding (and schema id for typed) before invoking the right
 list of callbacks.
 
-## `sensor:` platform: `multicast_pubsub`
+## `sensor:` platform: `mpubsub`
 
 ```yaml
 sensor:
-  - platform: multicast_pubsub
-    multicast_pubsub_id: my_pubsub   # optional
+  - platform: mpubsub
+    mpubsub_id: my_pubsub   # optional
     topic: "home/livingroom/temp"
     name: "Living Room Temperature"
     mode: subscribe                  # subscribe | publish
@@ -151,7 +151,7 @@ sensor:
 
 | Key                   | Required | Type   | Default     | Notes                                                            |
 |-----------------------|:--------:|--------|-------------|------------------------------------------------------------------|
-| `multicast_pubsub_id` | no       | id     | auto        | Which `multicast_pubsub:` instance to attach to.                 |
+| `mpubsub_id` | no       | id     | auto        | Which `mpubsub:` instance to attach to.                 |
 | `topic`               | yes      | str    | —           | Topic name, same constraints as the action.                      |
 | `mode`                | no       | enum   | `subscribe` | `subscribe` (decode payload as float → sensor state) / `publish` (sensor state → ASCII float on the wire). |
 
@@ -162,7 +162,7 @@ filters, device class, `on_value`, MQTT discovery, etc., all work normally.
 ## Typed-message schemas (`messages:`)
 
 ```yaml
-multicast_pubsub:
+mpubsub:
   messages:
     - id: room_climate
       fields:
@@ -180,7 +180,7 @@ doesn't match its expected schema.
 
 | Key      | Required | Type   | Notes                                                                     |
 |----------|:--------:|--------|---------------------------------------------------------------------------|
-| `id`     | yes      | str    | Identifier-like (alphanumeric + `_-`, start with letter); becomes the C++ struct name. Must be unique within a `multicast_pubsub:` instance. |
+| `id`     | yes      | str    | Identifier-like (alphanumeric + `_-`, start with letter); becomes the C++ struct name. Must be unique within a `mpubsub:` instance. |
 | `fields` | yes      | list   | At least one field.                                                       |
 
 Per field:
@@ -220,7 +220,7 @@ form's `set_X` / `optional<T>` overloads. See [`CXX_API.md`](CXX_API.md)
 for the full setter table.
 
 ```yaml
-multicast_pubsub:
+mpubsub:
   messages:
     - id: door_events
       fields:

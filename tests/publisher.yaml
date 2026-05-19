@@ -10,9 +10,9 @@ external_components:
   - source:
       type: local
       path: ../components
-    components: [multicast_pubsub]
+    components: [mpubsub]
 
-multicast_pubsub:
+mpubsub:
   port: 18512
   scope: link-local
   hops: 1
@@ -24,7 +24,7 @@ sensor:
     name: "Source Temperature"
     lambda: 'return 20.0f + (millis() / 1000) % 10;'
     update_interval: 1s
-  - platform: multicast_pubsub
+  - platform: mpubsub
     id: published_temp
     topic: "test/temp"
     name: "Published Temperature"

@@ -21,9 +21,9 @@ external_components:
   - source:
       type: local
       path: ../components
-    components: [multicast_pubsub]
+    components: [mpubsub]
 
-multicast_pubsub:
+mpubsub:
   id: pubsub
   scope: link-local
   messages:
@@ -58,7 +58,7 @@ interval:
     then:
       # Typed publish via YAML sugar -- declares the message id and the
       # values: dict; the codegen-emitted Publish<Msg>Action does the rest.
-      - multicast_pubsub.publish:
+      - mpubsub.publish:
           topic: "test/climate"
           message: room_climate
           values:
@@ -70,7 +70,7 @@ interval:
     then:
       # Repeated-field exercise via YAML sugar. For repeated fields the
       # value is a single lambda returning the whole std::vector<T>.
-      - multicast_pubsub.publish:
+      - mpubsub.publish:
           topic: "test/door"
           message: door_events
           values:

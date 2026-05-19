@@ -1,5 +1,5 @@
 // Command mqtt-pubsub-bridge mirrors messages between an MQTT broker and
-// the multicast_pubsub fabric. Each entry in the YAML config is one
+// the mpubsub fabric. Each entry in the YAML config is one
 // direction (mqtt_to_mpubsub or mpubsub_to_mqtt) -- declare two entries
 // to mirror a topic both ways.
 package main

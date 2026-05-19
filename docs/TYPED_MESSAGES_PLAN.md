@@ -98,7 +98,7 @@ false-match rate; the 112-bit IPv6 group hash already filters by topic.
 ### Declaring schemas
 
 ```yaml
-multicast_pubsub:
+mpubsub:
   scope: link-local
   messages:
     - id: room_climate
@@ -115,14 +115,14 @@ and `encode_to` / `decode_from` methods.
 
 Raw mode (existing behavior):
 ```yaml
-- multicast_pubsub.publish:
+- mpubsub.publish:
     topic: "home/vacuum/done"
     payload: "1"
 ```
 
 Typed mode (new):
 ```yaml
-- multicast_pubsub.publish:
+- mpubsub.publish:
     topic: "home/livingroom/climate"
     message: room_climate
     values:
@@ -138,7 +138,7 @@ rejects configs that supply both or neither.
 
 Raw mode (existing):
 ```yaml
-multicast_pubsub:
+mpubsub:
   on_message:
     - topic: "home/vacuum/done"
       then:
@@ -149,7 +149,7 @@ multicast_pubsub:
 
 Typed mode (new):
 ```yaml
-multicast_pubsub:
+mpubsub:
   on_message:
     - topic: "home/livingroom/climate"
       message: room_climate
@@ -241,7 +241,7 @@ struct RoomClimate {
 };
 ```
 
-Codegen template at `components/multicast_pubsub/proto_emitter.py`,
+Codegen template at `components/mpubsub/proto_emitter.py`,
 mirroring the shape of `esphome/components/api/api_pb2.{h,cpp}`. Uses
 ESPHome's own `proto.h` primitives — no vendored protobuf, no nanopb,
 automatically tracks whatever ESPHome version the user is building
@@ -325,14 +325,14 @@ class DynamicReader {
 ## Files
 
 ### Modify
-* `components/multicast_pubsub/wire_format.h` — replace `FLAGS` with
+* `components/mpubsub/wire_format.h` — replace `FLAGS` with
   `Encoding` enum, drop `FLAG_TEXT`/`FLAG_RETAIN_HINT`.
-* `components/multicast_pubsub/wire_format.cpp` — encode/decode with
+* `components/mpubsub/wire_format.cpp` — encode/decode with
   encoding enum.
-* `components/multicast_pubsub/multicast_pubsub.{h,cpp}` — typed
+* `components/mpubsub/multicast_pubsub.{h,cpp}` — typed
   publish/subscribe, schema-id dispatch.
-* `components/multicast_pubsub/automation.h` — typed trigger templates.
-* `components/multicast_pubsub/__init__.py` — `messages:` schema,
+* `components/mpubsub/automation.h` — typed trigger templates.
+* `components/mpubsub/__init__.py` — `messages:` schema,
   `message:` reference in action/trigger, mutual-exclusion validation,
   codegen for each message type.
 * `tests/unit/reference.py` — encoding enum, schema_id helper.
@@ -343,8 +343,8 @@ class DynamicReader {
   every example using flags — update to the new wire layout.
 
 ### Add
-* `components/multicast_pubsub/proto_emitter.py` — schema-to-C++ codegen.
-* `components/multicast_pubsub/dynamic_message.{h,cpp}` — `DynamicMessage`
+* `components/mpubsub/proto_emitter.py` — schema-to-C++ codegen.
+* `components/mpubsub/dynamic_message.{h,cpp}` — `DynamicMessage`
   / `DynamicReader` (supports `add_message` / `as_message` for nesting).
 * `tests/unit/test_schema_id.py` — locked golden vectors.
 * `tests/unit/test_protobuf_roundtrip.py` — generated struct encode→decode.
@@ -397,7 +397,7 @@ class DynamicReader {
 
 ## Decisions resolved
 
-* `messages:` nests **under top-level `multicast_pubsub:`**. Users who
+* `messages:` nests **under top-level `mpubsub:`**. Users who
   want shared schemas across devices can `!include` the inner list.
 * Schema-id mismatches log at `ESP_LOGV` (visible only at verbose log
   levels, no spam in normal runs).

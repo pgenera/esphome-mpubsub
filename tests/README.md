@@ -1,4 +1,4 @@
-# multicast_pubsub tests
+# mpubsub tests
 
 ## Unit tests
 
@@ -88,7 +88,7 @@ second with `flags=01` (FLAG_TEXT) and the ASCII float payload.
 * **`subscriber.yaml`** — a second host-platform device that subscribes via
   `mode: subscribe` and also has an `on_message:` trigger for a control topic.
 * **`bridge_example.yaml`** — esp32 device running BOTH `mqtt:` and
-  `multicast_pubsub:` simultaneously, bridging messages between them in
+  `mpubsub:` simultaneously, bridging messages between them in
   automations. Validates that the two components coexist (the C++ MQTT
   client doesn't have a host port, so this one is `esphome config`-only).
 

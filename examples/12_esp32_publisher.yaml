@@ -25,14 +25,14 @@ logger:
 
 external_components:
   - source: { type: local, path: ../components }
-    components: [multicast_pubsub]
+    components: [mpubsub]
 
-multicast_pubsub:
+mpubsub:
   scope: link-local
 
 interval:
   - interval: 5s
     then:
-      - multicast_pubsub.publish:
+      - mpubsub.publish:
           topic: "home/heartbeat"
           payload: "tick"

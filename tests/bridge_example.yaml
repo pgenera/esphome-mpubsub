@@ -1,6 +1,6 @@
 # Single device that runs BOTH the existing ESPHome `mqtt:` component and the
-# new `multicast_pubsub:` component, and bridges messages between them. This
-# demonstrates that multicast_pubsub is complementary, not a replacement.
+# new `mpubsub:` component, and bridges messages between them. This
+# demonstrates that mpubsub is complementary, not a replacement.
 #
 # This file is for documentation / `esphome config` validation only — running
 # it end-to-end requires an MQTT broker reachable from the host.
@@ -11,7 +11,7 @@ esphome:
 # MQTT support is not available on the host platform, so the bridge example
 # targets esp32. It's intentionally `esphome config`-only — it documents that
 # both components can coexist on a real device. End-to-end testing of the
-# bridge requires hardware plus a reachable MQTT broker; the multicast_pubsub
+# bridge requires hardware plus a reachable MQTT broker; the mpubsub
 # half is exercised by tests/publisher.yaml + tests/subscriber.yaml on host.
 esp32:
   board: esp32dev
@@ -29,7 +29,7 @@ external_components:
   - source:
       type: local
       path: ../components
-    components: [multicast_pubsub]
+    components: [mpubsub]
 
 mqtt:
   broker: 127.0.0.1
@@ -38,11 +38,11 @@ mqtt:
   on_message:
     - topic: "bridge/in/temp"
       then:
-        - multicast_pubsub.publish:
+        - mpubsub.publish:
             topic: "home/livingroom/temp"
             payload: !lambda 'return x;'
 
-multicast_pubsub:
+mpubsub:
   scope: link-local
   on_message:
     - topic: "home/livingroom/temp"

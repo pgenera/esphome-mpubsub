@@ -1,4 +1,4 @@
-# multicast_pubsub — ESPHome external component
+# mpubsub — ESPHome external component
 
 A brokerless publish/subscribe transport for ESPHome based on IPv6 multicast.
 Each topic deterministically maps to an IPv6 multicast group; publishers send
@@ -31,9 +31,9 @@ Two big "modes" — pick whichever fits the data:
 ```yaml
 external_components:
   - source: { type: local, path: ../components }
-    components: [multicast_pubsub]
+    components: [mpubsub]
 
-multicast_pubsub:
+mpubsub:
   id: pubsub
   port: 18512            # default; one above ESPHome udp: default (18511)
   scope: link-local      # default; safest scope, works on any flat LAN
@@ -46,7 +46,7 @@ multicast_pubsub:
 
 # Publish from any automation
 on_...:
-  - multicast_pubsub.publish:
+  - mpubsub.publish:
       topic: "home/vacuum/done"
       payload: !lambda 'return "1";'
 ```
@@ -55,7 +55,7 @@ on_...:
 
 ```yaml
 sensor:
-  - platform: multicast_pubsub
+  - platform: mpubsub
     topic: "home/livingroom/temp"
     name: "Living Room Temperature"
     # mode: subscribe (default) | publish
@@ -66,7 +66,7 @@ sensor:
 ```yaml
 api:                     # required when messages: is non-empty
 
-multicast_pubsub:
+mpubsub:
   id: pubsub
   messages:
     - id: room_climate

@@ -1,8 +1,8 @@
-"""Sensor platform for multicast_pubsub.
+"""Sensor platform for mpubsub.
 
 YAML:
     sensor:
-      - platform: multicast_pubsub
+      - platform: mpubsub
         topic: "home/livingroom/temp"
         name: "Living Room Temperature"
         mode: subscribe          # subscribe (default) | publish
@@ -33,9 +33,9 @@ from . import (
     multicast_pubsub_ns,
 )
 
-DEPENDENCIES = ["multicast_pubsub"]
+DEPENDENCIES = ["mpubsub"]
 
-CONF_PARENT_ID = "multicast_pubsub_id"
+CONF_PARENT_ID = "mpubsub_id"
 
 MODE_SUBSCRIBE = "subscribe"
 MODE_PUBLISH = "publish"

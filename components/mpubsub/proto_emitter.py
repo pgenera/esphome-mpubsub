@@ -1,4 +1,4 @@
-"""Codegen for typed multicast_pubsub messages.
+"""Codegen for typed mpubsub messages.
 
 Given a YAML ``messages:`` entry, this module emits:
 
@@ -488,7 +488,7 @@ inline bool esphome::multicast_pubsub::messages::{struct_name}::Call::perform() 
 
 namespace esphome::multicast_pubsub {{
 
-// Codegen-generated YAML action class for `multicast_pubsub.publish:
+// Codegen-generated YAML action class for `mpubsub.publish:
 // + message: {msg.id}`. One TEMPLATABLE_VALUE per declared field
 // (std::vector<T> for repeated fields). Python codegen calls
 // set_<field>(...) on the templated values it has, leaves the rest at

@@ -1,7 +1,7 @@
-"""Python reference implementation of the multicast_pubsub wire protocol.
+"""Python reference implementation of the mpubsub wire protocol.
 
 This is the source of truth that the C++ implementation in
-``components/multicast_pubsub/`` must match byte-for-byte. It is intentionally
+``components/mpubsub/`` must match byte-for-byte. It is intentionally
 free of any ESPHome dependency so it can also be used by:
 
   * standalone bridges (e.g. an MQTT <-> multicast pub/sub gateway)

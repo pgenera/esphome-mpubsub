@@ -2,7 +2,7 @@
 #
 # arduino-esp8266 ships precompiled lwip2 with `LWIP_SOCKET=0`, so the
 # BSD-style IPv6 multicast API isn't exposed there. Instead, the ESP8266
-# build of multicast_pubsub talks directly to lwip's raw UDP/MLD6 API
+# build of mpubsub talks directly to lwip's raw UDP/MLD6 API
 # (`udp_new_ip_type`, `udp_sendto`, `mld6_joingroup`, ...). This requires
 # the IPv6 lwip variant -- selected automatically by `network: enable_ipv6: true`
 # which adds `-DPIO_FRAMEWORK_ARDUINO_LWIP2_IPV6_LOW_MEMORY`.
@@ -13,7 +13,7 @@ esphome:
 esp8266:
   board: nodemcuv2
 
-# multicast_pubsub speaks IPv6; on ESP8266 this also selects the
+# mpubsub speaks IPv6; on ESP8266 this also selects the
 # lwip2_ipv6 framework variant.
 network:
   enable_ipv6: true
@@ -26,14 +26,14 @@ logger:
 
 external_components:
   - source: { type: local, path: ../components }
-    components: [multicast_pubsub]
+    components: [mpubsub]
 
-multicast_pubsub:
+mpubsub:
   scope: link-local
 
 interval:
   - interval: 5s
     then:
-      - multicast_pubsub.publish:
+      - mpubsub.publish:
           topic: "home/heartbeat"
           payload: "tick"

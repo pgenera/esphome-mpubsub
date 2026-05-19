@@ -1,7 +1,7 @@
 """Minimal protobuf-3 wire-format encoder/decoder.
 
 This is the cross-check reference for the C++ ``DynamicMessage`` /
-``DynamicReader`` in ``components/multicast_pubsub/dynamic_message.{h,cpp}``.
+``DynamicReader`` in ``components/mpubsub/dynamic_message.{h,cpp}``.
 Only the subset of wire types ESPHome's encoder supports is implemented:
 
   * wire type 0: VARINT (bool, int32/64, uint32/64, sint32/64)

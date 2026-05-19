@@ -20,7 +20,7 @@ pytest -q
 ```
 
 The C++ harnesses (`topic_hash_test`, `wire_format_test`) link only
-`components/multicast_pubsub/*.cpp` plus `topic_hash_main.cpp` /
+`components/mpubsub/*.cpp` plus `topic_hash_main.cpp` /
 `wire_format_main.cpp` — no ESPHome dependencies. This means the SHA-256,
 topic-to-group, CRC32, header encode, and header decode code paths are
 exercised against a Python reference (`tests/unit/reference.py`) for

@@ -1,6 +1,6 @@
 """Fuzz tests targeting the **C++** implementation under ASan + UBSan.
 
-The C++ code in ``components/multicast_pubsub/`` is what actually runs
+The C++ code in ``components/mpubsub/`` is what actually runs
 on user devices; the Python ``reference.py`` exists as a spec checker.
 This file's job is to throw garbage at the C++ decoder, encoder, and
 topic-hash code -- with AddressSanitizer and UndefinedBehaviorSanitizer

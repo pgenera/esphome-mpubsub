@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Standalone probe / publisher for the multicast_pubsub protocol.
+"""Standalone probe / publisher for the mpubsub protocol.
 
 Examples:
     # Listen for raw publications, render as utf-8 if possible:
@@ -40,7 +40,7 @@ from pathlib import Path
 
 HERE = Path(__file__).parent
 sys.path.insert(0, str(HERE / "unit"))
-sys.path.insert(0, str(HERE.parent / "components" / "multicast_pubsub"))
+sys.path.insert(0, str(HERE.parent / "components" / "mpubsub"))
 
 from reference import (  # noqa: E402
     DEFAULT_PORT,
@@ -72,7 +72,7 @@ SCOPES = {
 
 
 def _load_schemas(path: Path) -> dict[int, dict]:
-    """Read a YAML file's ``multicast_pubsub.messages:`` block and return
+    """Read a YAML file's ``mpubsub.messages:`` block and return
     a mapping from SCHEMA_ID to a dict of ``{id, fields: [{name,type,tag,repeated}]}``.
 
     ESPHome configs use custom YAML tags (``!lambda``, ``!secret``,
@@ -104,10 +104,10 @@ def _load_schemas(path: Path) -> dict[int, dict]:
     raw = yaml.load(path.read_text(), Loader=_TolerantLoader)
     if not isinstance(raw, dict):
         raise SystemExit(f"{path}: top level is not a YAML mapping")
-    section = raw.get("multicast_pubsub", {})
+    section = raw.get("mpubsub", {})
     messages = section.get("messages", []) if isinstance(section, dict) else []
     if not messages:
-        raise SystemExit(f"{path}: no `multicast_pubsub.messages:` block found")
+        raise SystemExit(f"{path}: no `mpubsub.messages:` block found")
 
     # Defer to the actual codegen module for SCHEMA_ID so we stay in sync.
     from proto_emitter import Field as PField, Message as PMessage, schema_id
@@ -319,7 +319,7 @@ def main() -> int:
     )
     p.add_argument(
         "--schema", metavar="YAML", type=Path,
-        help="YAML file containing a multicast_pubsub.messages: block. "
+        help="YAML file containing a mpubsub.messages: block. "
              "When set, incoming PROTOBUF packets are decoded with field names "
              "from the matching schema; typed publishes need this flag.",
     )

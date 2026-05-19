@@ -1,4 +1,4 @@
-# Example 5: MQTT <-> multicast_pubsub bridge.
+# Example 5: MQTT <-> mpubsub bridge.
 #
 # One ESP32 on the network acts as a bidirectional bridge between Home
 # Assistant's MQTT broker and the brokerless multicast pub/sub fabric. This
@@ -6,7 +6,7 @@
 # it, broker-less LAN comms where you don't.
 #
 # Topic mapping (pick whatever convention you like):
-#   MQTT topic              <->  multicast_pubsub topic
+#   MQTT topic              <->  mpubsub topic
 #   ha/bridge/from-mc/<t>   <--   <t>     (incoming multicast -> HA)
 #   ha/bridge/to-mc/<t>     -->   <t>     (HA -> outgoing multicast)
 #
@@ -29,7 +29,7 @@ logger:
 
 external_components:
   - source: { type: local, path: ../components }
-    components: [multicast_pubsub]
+    components: [mpubsub]
 
 mqtt:
   broker: !secret mqtt_broker
@@ -40,11 +40,11 @@ mqtt:
     # republish as a multicast pub/sub message on `home/doorbell/front`.
     - topic: "ha/bridge/to-mc/home/doorbell/front"
       then:
-        - multicast_pubsub.publish:
+        - mpubsub.publish:
             topic: "home/doorbell/front"
             payload: !lambda 'return x;'
 
-multicast_pubsub:
+mpubsub:
   scope: link-local
   on_message:
     # And the other direction: any multicast publication on

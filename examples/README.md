@@ -16,7 +16,7 @@ external_components:
       type: git
       url: https://github.com/pgenera/esphome-multicast-pubsub
       ref: main
-    components: [multicast_pubsub]
+    components: [mpubsub]
 ```
 
 | File                              | What it shows                                                                              |
@@ -25,7 +25,7 @@ external_components:
 | `02_thermostat_subscriber.yaml`   | **Raw subscribe** (via the sensor platform) and drive a relay; no broker in the loop.      |
 | `03_button_doorbell.yaml`         | Press a button → one multicast publication → every listener reacts in parallel.            |
 | `04_chime_subscriber.yaml`        | Companion to 03: an RTTTL chime that joins the doorbell topic via `on_message`.            |
-| `05_mqtt_bridge.yaml`             | Run `mqtt:` and `multicast_pubsub:` on the same device, bridging raw payloads both ways.   |
+| `05_mqtt_bridge.yaml`             | Run `mqtt:` and `mpubsub:` on the same device, bridging raw payloads both ways.   |
 | `06_robot_coordination.yaml`      | The spec's motivating story: two devices coordinating with no cloud server.                |
 | `07_typed_climate_sensor.yaml`    | **Typed publish** of a `RoomClimate` message via the fluent `Call` builder.                |
 | `08_typed_climate_subscriber.yaml`| **Typed subscribe** via `on_message: + message:` — the trigger arg is the decoded struct. |
@@ -44,7 +44,7 @@ for your call site:
 
 ```yaml
 # 1. Raw publish from YAML (just a string)
-- multicast_pubsub.publish:
+- mpubsub.publish:
     topic: "home/bedroom/climate"
     payload: !lambda 'return esphome::str_sprintf("%.1f", id(t).state);'
 
@@ -86,7 +86,7 @@ And the same message can be received two ways:
 
 ```yaml
 # A. Typed receive (YAML on_message + message:)
-multicast_pubsub:
+mpubsub:
   on_message:
     - topic: "home/bedroom/climate"
       message: room_climate
@@ -113,7 +113,7 @@ publish a raw IEEE-754 float (4 bytes, faster, no parsing on receive):
 
 ```yaml
 on_value:
-  - multicast_pubsub.publish:
+  - mpubsub.publish:
       topic: "home/livingroom/temp"
       payload: !lambda |-
         char buf[4];

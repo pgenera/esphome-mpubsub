@@ -11,7 +11,7 @@
 
 namespace esphome::multicast_pubsub {
 
-static const char *const TAG = "multicast_pubsub";
+static const char *const TAG = "mpubsub";
 
 }  // namespace esphome::multicast_pubsub
 

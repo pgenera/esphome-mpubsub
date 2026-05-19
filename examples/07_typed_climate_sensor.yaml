@@ -21,15 +21,15 @@ wifi:
 
 logger:
 
-# api: is required when multicast_pubsub.messages: is non-empty --
+# api: is required when mpubsub.messages: is non-empty --
 # we use its protobuf encoding primitives.
 api:
 
 external_components:
   - source: { type: local, path: ../components }
-    components: [multicast_pubsub]
+    components: [mpubsub]
 
-multicast_pubsub:
+mpubsub:
   id: pubsub
   scope: link-local
   messages:
@@ -54,7 +54,7 @@ sensor:
         # single RoomClimate message. The YAML sugar generates a
         # PublishRoomClimateAction at codegen time and wires each
         # `values:` entry as a TEMPLATABLE_VALUE setter.
-        - multicast_pubsub.publish:
+        - mpubsub.publish:
             topic: "home/bedroom/climate"
             message: room_climate
             values:
