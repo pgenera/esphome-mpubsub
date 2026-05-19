@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -32,6 +33,16 @@ type MPubsubConfig struct {
 	Scope     string `yaml:"scope"`     // default link-local
 	Hops      int    `yaml:"hops"`      // default 1
 	Interface string `yaml:"interface"` // default: kernel-picked
+
+	// RetransmitCount is the number of UDP datagrams emitted per logical
+	// publish (1 = no retransmission, the default). The first send is
+	// always synchronous; the rest are scheduled on a dedicated goroutine
+	// so the MQTT receive callback returns immediately.
+	RetransmitCount int `yaml:"retransmit_count"`
+	// RetransmitDelay is the spacing between successive sends. Accepts
+	// any Go duration string (e.g. "100ms", "1s", "0s"). 0 is supported.
+	RetransmitDelayRaw string        `yaml:"retransmit_delay"`
+	RetransmitDelay    time.Duration `yaml:"-"`
 }
 
 type BridgeEntry struct {
@@ -55,14 +66,16 @@ func LoadConfig(path string) (*Config, error) {
 	if err := yaml.Unmarshal(data, c); err != nil {
 		return nil, fmt.Errorf("parse yaml: %w", err)
 	}
-	c.applyDefaults()
+	if err := c.applyDefaults(); err != nil {
+		return nil, err
+	}
 	if err := c.validate(); err != nil {
 		return nil, err
 	}
 	return c, nil
 }
 
-func (c *Config) applyDefaults() {
+func (c *Config) applyDefaults() error {
 	if c.MQTT.ClientID == "" {
 		c.MQTT.ClientID = "multicast-pubsub-bridge"
 	}
@@ -75,6 +88,23 @@ func (c *Config) applyDefaults() {
 	if c.MPubsub.Hops == 0 {
 		c.MPubsub.Hops = 1
 	}
+	if c.MPubsub.RetransmitCount == 0 {
+		c.MPubsub.RetransmitCount = 1
+	}
+	if c.MPubsub.RetransmitDelayRaw == "" {
+		c.MPubsub.RetransmitDelay = 100 * time.Millisecond
+	} else {
+		d, err := time.ParseDuration(c.MPubsub.RetransmitDelayRaw)
+		if err != nil {
+			return fmt.Errorf("multicast_pubsub.retransmit_delay %q: %w",
+				c.MPubsub.RetransmitDelayRaw, err)
+		}
+		if d < 0 {
+			return fmt.Errorf("multicast_pubsub.retransmit_delay must be >= 0 (got %s)", d)
+		}
+		c.MPubsub.RetransmitDelay = d
+	}
+	return nil
 }
 
 func (c *Config) validate() error {
@@ -86,6 +116,10 @@ func (c *Config) validate() error {
 	}
 	if c.MPubsub.Hops < 1 || c.MPubsub.Hops > 255 {
 		return fmt.Errorf("multicast_pubsub.hops must be 1..255, got %d", c.MPubsub.Hops)
+	}
+	if c.MPubsub.RetransmitCount < 1 || c.MPubsub.RetransmitCount > 255 {
+		return fmt.Errorf("multicast_pubsub.retransmit_count must be 1..255, got %d",
+			c.MPubsub.RetransmitCount)
 	}
 	if len(c.Bridges) == 0 {
 		return fmt.Errorf("at least one bridge entry is required")

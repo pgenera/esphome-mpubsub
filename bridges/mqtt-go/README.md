@@ -37,6 +37,8 @@ See [`bridge.example.yaml`](bridge.example.yaml) for the config shape.
 | `multicast_pubsub` | `port` | `18512` | Must match the ESPHome devices. |
 | `multicast_pubsub` | `scope` | `link-local` | `link-local` / `site-local` / `organization-local`. |
 | `multicast_pubsub` | `hops` | `1` | Outgoing `IPV6_MULTICAST_HOPS`. |
+| `multicast_pubsub` | `retransmit_count` | `1` | Number of UDP datagrams emitted per logical publish. `1` = no retransmission. First send is synchronous; the rest run on a per-publish goroutine. |
+| `multicast_pubsub` | `retransmit_delay` | `100ms` | Spacing between successive sends. Go duration string (`"100ms"`, `"1s"`, `"0s"`). `0` supported. |
 | `multicast_pubsub` | `interface` | (kernel default) | Egress interface name (`eth0`, `br-lan`, …). |
 | `bridges[]` | `direction` | — | `mqtt_to_mpubsub` or `mpubsub_to_mqtt`. One-directional. |
 | `bridges[]` | `mqtt_topic` | — | The MQTT topic to subscribe to (mqtt→mpubsub) or publish to (mpubsub→mqtt). |

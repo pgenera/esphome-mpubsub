@@ -16,6 +16,8 @@ multicast_pubsub:
   port: 18512
   scope: link-local          # link-local | site-local | organization-local
   hops: 1
+  retransmit_count: 1        # 1 = no retransmission
+  retransmit_delay: 100ms    # Go duration string; 0s supported
   # interface: eth0          # optional; defaults to the kernel-picked egress
 
 bridges:

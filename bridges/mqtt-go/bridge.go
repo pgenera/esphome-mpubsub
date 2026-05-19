@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net"
 	"sync"
+	"time"
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
 )
@@ -126,6 +127,33 @@ func (b *Bridge) handleMQTTMessage(mpubsubTopic string, group net.IP, msg mqtt.M
 	}
 	b.log.Debug("mqtt -> mpubsub",
 		"mqtt_topic", msg.Topic(), "mpubsub_topic", mpubsubTopic, "bytes", len(msg.Payload()))
+	if b.cfg.MPubsub.RetransmitCount > 1 {
+		b.scheduleRetransmits(mpubsubTopic, group, pkt)
+	}
+}
+
+// scheduleRetransmits fires off (count - 1) additional sends of the same
+// pre-encoded datagram, spaced by the configured delay. Runs on its own
+// goroutine so the MQTT callback returns immediately; the first send has
+// already happened synchronously in handleMQTTMessage. delay = 0 is fine
+// (time.Sleep(0) returns immediately) but each iteration still yields, so
+// the loop won't starve other goroutines.
+func (b *Bridge) scheduleRetransmits(mpubsubTopic string, group net.IP, pkt []byte) {
+	count := b.cfg.MPubsub.RetransmitCount
+	delay := b.cfg.MPubsub.RetransmitDelay
+	go func() {
+		for i := 1; i < count; i++ {
+			if delay > 0 {
+				time.Sleep(delay)
+			}
+			if err := b.mcast.SendTo(group, pkt); err != nil {
+				b.log.Warn("multicast retransmit failed",
+					"mpubsub_topic", mpubsubTopic, "group", group.String(),
+					"attempt", i+1, "err", err)
+				return
+			}
+		}
+	}()
 }
 
 func (b *Bridge) mcastReceiveLoop(ctx context.Context) {
