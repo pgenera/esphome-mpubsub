@@ -9,6 +9,7 @@ from esphome.components import sensor as esphome_sensor
 import esphome.config_validation as cv
 from esphome.const import (
     CONF_ACCURACY_DECIMALS,
+    CONF_DISABLED_BY_DEFAULT,
     CONF_ENTITY_CATEGORY,
     CONF_ID,
     CONF_NAME,
@@ -342,8 +343,8 @@ async def to_code(config):
     # entities by default, which would defeat the whole point.
     parent_slug = str(config[CONF_ID].id)
     for slug, setter in (
-        ("messages_sent", "set_messages_sent_sensor"),
-        ("messages_received", "set_messages_received_sensor"),
+        ("packets_sent", "set_packets_sent_sensor"),
+        ("packets_received", "set_packets_received_sensor"),
     ):
         s_id = ID(f"{parent_slug}_{slug}", is_declaration=True, type=esphome_sensor.Sensor)
         s_config = esphome_sensor.sensor_schema(esphome_sensor.Sensor)(
@@ -353,6 +354,11 @@ async def to_code(config):
                 CONF_ACCURACY_DECIMALS: 0,
                 CONF_STATE_CLASS: STATE_CLASS_TOTAL_INCREASING,
                 CONF_ENTITY_CATEGORY: ENTITY_CATEGORY_DIAGNOSTIC,
+                # Counters are diagnostics for tracking link health; default
+                # them off in HA so they don't clutter the UI for the common
+                # case of "I just want my sensor reading". Users can re-enable
+                # per-device when investigating loss / retransmit behavior.
+                CONF_DISABLED_BY_DEFAULT: True,
             }
         )
         s_var = await esphome_sensor.new_sensor(s_config)

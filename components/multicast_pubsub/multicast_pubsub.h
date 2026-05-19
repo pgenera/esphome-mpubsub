@@ -68,6 +68,7 @@ class MulticastPubSub : public Component {
   // (1 = no retransmission). delay is the spacing between successive
   // sends; the first send is unconditional and synchronous.
   void set_retransmit_count(uint8_t count) { this->retransmit_count_ = count; }
+  uint8_t get_retransmit_count() const { return this->retransmit_count_; }
   void set_retransmit_delay_ms(uint32_t delay_ms) { this->retransmit_delay_ms_ = delay_ms; }
 
   void setup() override;
@@ -145,8 +146,8 @@ class MulticastPubSub : public Component {
 
   // Diagnostic sensors auto-created by codegen. Picked up by any platform that
   // iterates registered sensors (prometheus, web_server, HA API, etc).
-  void set_messages_sent_sensor(sensor::Sensor *s) { this->messages_sent_sensor_ = s; }
-  void set_messages_received_sensor(sensor::Sensor *s) { this->messages_received_sensor_ = s; }
+  void set_packets_sent_sensor(sensor::Sensor *s) { this->packets_sent_sensor_ = s; }
+  void set_packets_received_sensor(sensor::Sensor *s) { this->packets_received_sensor_ = s; }
 
  protected:
   void deliver_(uint32_t crc, Encoding encoding, std::span<const uint8_t> payload);
@@ -198,10 +199,14 @@ class MulticastPubSub : public Component {
 #endif
   std::vector<Subscription> subscriptions_{};
 
-  sensor::Sensor *messages_sent_sensor_{nullptr};
-  sensor::Sensor *messages_received_sensor_{nullptr};
-  uint32_t messages_sent_{0};
-  uint32_t messages_received_{0};
+  sensor::Sensor *packets_sent_sensor_{nullptr};
+  sensor::Sensor *packets_received_sensor_{nullptr};
+  // Packet-level counters: every UDP datagram counts, including
+  // retransmits on the sent side (one retransmit_count=3 publish() bumps
+  // packets_sent_ by 3) and every received datagram on the recv side
+  // before any topic / CRC filtering.
+  uint32_t packets_sent_{0};
+  uint32_t packets_received_{0};
   // Last value published to the sensors -- compared each loop() to avoid
   // republishing identical readings (publish_state() is otherwise quite
   // chatty: triggers filters, MQTT, prometheus state churn, ...).

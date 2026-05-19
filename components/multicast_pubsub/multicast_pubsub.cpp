@@ -216,7 +216,6 @@ bool MulticastPubSub::publish(const std::string &topic, std::span<const uint8_t>
     ESP_LOGW(TAG, "publish(%s): initial send failed", topic.c_str());
     return false;
   }
-  this->messages_sent_++;
   ESP_LOGV(TAG, "published %zu bytes to '%s'", payload.size(), topic.c_str());
   this->schedule_retransmits_(datagram, group);
   return true;
@@ -240,6 +239,9 @@ bool MulticastPubSub::send_datagram_(const std::vector<uint8_t> &datagram, const
     ESP_LOGW(TAG, "send_datagram: udp_sendto_if err %d", err);
     return false;
   }
+  // Count packets, not publish() invocations: a publish() with
+  // retransmit_count=3 bumps this by 3 over the resend interval.
+  this->packets_sent_++;
   return true;
 }
 
@@ -258,13 +260,17 @@ bool MulticastPubSub::publish_dynamic(const std::string &topic, uint16_t schema_
 }
 
 void MulticastPubSub::on_packet_(std::span<const uint8_t> raw) {
+  // Count every datagram delivered to the socket -- including malformed
+  // and unsubscribed-topic packets. This matches what tcpdump on the
+  // listening interface would show; subtracting topic-matched callbacks
+  // gives a "stray traffic" signal.
+  this->packets_received_++;
   DecodedPacket pkt;
   auto err = decode(raw, &pkt);
   if (err != DecodeError::OK) {
     ESP_LOGV(TAG, "drop packet: decode err %u", static_cast<unsigned>(err));
     return;
   }
-  this->messages_received_++;
   this->deliver_(pkt.topic_crc, pkt.encoding, pkt.payload);
 }
 
@@ -297,13 +303,13 @@ void MulticastPubSub::deliver_(uint32_t crc, Encoding encoding, std::span<const 
 }
 
 void MulticastPubSub::publish_metrics_() {
-  if (this->messages_sent_sensor_ != nullptr && this->messages_sent_ != this->last_published_sent_) {
-    this->messages_sent_sensor_->publish_state(static_cast<float>(this->messages_sent_));
-    this->last_published_sent_ = this->messages_sent_;
+  if (this->packets_sent_sensor_ != nullptr && this->packets_sent_ != this->last_published_sent_) {
+    this->packets_sent_sensor_->publish_state(static_cast<float>(this->packets_sent_));
+    this->last_published_sent_ = this->packets_sent_;
   }
-  if (this->messages_received_sensor_ != nullptr && this->messages_received_ != this->last_published_received_) {
-    this->messages_received_sensor_->publish_state(static_cast<float>(this->messages_received_));
-    this->last_published_received_ = this->messages_received_;
+  if (this->packets_received_sensor_ != nullptr && this->packets_received_ != this->last_published_received_) {
+    this->packets_received_sensor_->publish_state(static_cast<float>(this->packets_received_));
+    this->last_published_received_ = this->packets_received_;
   }
 }
 
@@ -391,24 +397,26 @@ void MulticastPubSub::loop() {
 }
 
 void MulticastPubSub::on_packet_(std::span<const uint8_t> raw) {
+  // See ESP8266 branch on_packet_ for the "count datagrams, not topic
+  // matches" rationale.
+  this->packets_received_++;
   DecodedPacket pkt;
   auto err = decode(raw, &pkt);
   if (err != DecodeError::OK) {
     ESP_LOGV(TAG, "drop packet: decode err %u", static_cast<unsigned>(err));
     return;
   }
-  this->messages_received_++;
   this->deliver_(pkt.topic_crc, pkt.encoding, pkt.payload);
 }
 
 void MulticastPubSub::publish_metrics_() {
-  if (this->messages_sent_sensor_ != nullptr && this->messages_sent_ != this->last_published_sent_) {
-    this->messages_sent_sensor_->publish_state(static_cast<float>(this->messages_sent_));
-    this->last_published_sent_ = this->messages_sent_;
+  if (this->packets_sent_sensor_ != nullptr && this->packets_sent_ != this->last_published_sent_) {
+    this->packets_sent_sensor_->publish_state(static_cast<float>(this->packets_sent_));
+    this->last_published_sent_ = this->packets_sent_;
   }
-  if (this->messages_received_sensor_ != nullptr && this->messages_received_ != this->last_published_received_) {
-    this->messages_received_sensor_->publish_state(static_cast<float>(this->messages_received_));
-    this->last_published_received_ = this->messages_received_;
+  if (this->packets_received_sensor_ != nullptr && this->packets_received_ != this->last_published_received_) {
+    this->packets_received_sensor_->publish_state(static_cast<float>(this->packets_received_));
+    this->last_published_received_ = this->packets_received_;
   }
 }
 
@@ -499,7 +507,6 @@ bool MulticastPubSub::publish(const std::string &topic, std::span<const uint8_t>
     ESP_LOGW(TAG, "publish(%s): initial send failed", topic.c_str());
     return false;
   }
-  this->messages_sent_++;
   ESP_LOGV(TAG, "published %zu bytes to '%s'", payload.size(), topic.c_str());
   this->schedule_retransmits_(datagram, group);
   return true;
@@ -518,6 +525,9 @@ bool MulticastPubSub::send_datagram_(const std::vector<uint8_t> &datagram, const
     ESP_LOGW(TAG, "send_datagram: sendto errno %d", errno);
     return false;
   }
+  // Count packets, not publish() invocations: a publish() with
+  // retransmit_count=3 bumps this by 3 over the resend interval.
+  this->packets_sent_++;
   return true;
 }
 
