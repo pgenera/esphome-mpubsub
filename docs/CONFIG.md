@@ -52,6 +52,7 @@ on_...:
 | `id`      | no       | id               | Pick a specific `multicast_pubsub:` instance.                                          |
 | `topic`   | yes      | templatable str  | UTF-8, non-empty, ≤200 bytes, no NUL.                                                  |
 | `payload` | yes      | templatable str  | Raw bytes-as-string. Maximum 1220 bytes; literals over the limit are rejected at config time. |
+| `retransmit_count` | no | templatable int 1–255 | Override the component-level `retransmit_count` for this one publish. Useful for "critical" messages (door open/close, alarm trips) that warrant more aggressive resending without raising the global rate. |
 
 If `payload` is a runtime lambda we can't size-check at config time. An
 oversize payload at runtime is logged at `ERROR` level and the publish call
@@ -75,6 +76,7 @@ on_value:
 |-----------|:--------:|-------------------------------|----------------------------------------------------------------------------------------------------|
 | `message` | yes      | id                            | A messages: entry id declared on a `multicast_pubsub:` instance in the same config.                |
 | `values`  | yes      | mapping `field → templatable` | One entry per field. Missing fields default to zero/empty. Unknown field names fail config-validation. |
+| `retransmit_count` | no | templatable int 1–255       | Per-publish override of the component-level `retransmit_count`, same semantics as the raw-publish form. |
 
 Per-field value forms:
 

@@ -417,6 +417,11 @@ PUBLISH_ACTION_SCHEMA = cv.All(
             cv.Required(CONF_TOPIC): cv.templatable(_topic_validator),
             cv.Optional(CONF_PAYLOAD): cv.templatable(_static_payload_validator),
             cv.Optional(CONF_MESSAGE): _message_id_validator,
+            # Per-call override of the component-level retransmit_count.
+            # Same range as the component option (1..255).
+            cv.Optional(CONF_RETRANSMIT_COUNT): cv.templatable(
+                cv.int_range(min=1, max=255)
+            ),
             # Values are validated lazily -- per-field type-coercion happens
             # at codegen time when we know which message they belong to.
             cv.Optional(CONF_VALUES): cv.Schema({cv.string_strict: cv.valid}),
@@ -455,6 +460,11 @@ async def publish_action_to_code(config, action_id, template_arg, args):
             config[CONF_PAYLOAD], args, cg.std_string
         )
         cg.add(var.set_payload(payload_tpl))
+        if CONF_RETRANSMIT_COUNT in config:
+            rc_tpl = await cg.templatable(
+                config[CONF_RETRANSMIT_COUNT], args, cg.uint8
+            )
+            cg.add(var.set_retransmit_count(rc_tpl))
         return var
 
     # Typed publish path -- rewrite the action_id to point at the
@@ -489,6 +499,12 @@ async def publish_action_to_code(config, action_id, template_arg, args):
 
     topic_tpl = await cg.templatable(config[CONF_TOPIC], args, cg.std_string)
     cg.add(var.set_topic(topic_tpl))
+
+    if CONF_RETRANSMIT_COUNT in config:
+        rc_tpl = await cg.templatable(
+            config[CONF_RETRANSMIT_COUNT], args, cg.uint8
+        )
+        cg.add(var.set_retransmit_count(rc_tpl))
 
     for field_name, raw_value in config.get(CONF_VALUES, {}).items():
         type_name, repeated = field_types[field_name]

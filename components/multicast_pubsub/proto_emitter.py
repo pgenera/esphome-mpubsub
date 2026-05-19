@@ -498,12 +498,21 @@ template<typename... Ts> class Publish{struct_name}Action
     : public esphome::Action<Ts...>, public esphome::Parented<MulticastPubSub> {{
  public:
   TEMPLATABLE_VALUE(std::string, topic)
+  TEMPLATABLE_VALUE(uint8_t, retransmit_count)
 {action_setters}
 
   void play(Ts... x) override {{
     esphome::multicast_pubsub::messages::{struct_name} m;
 {action_assignments}
-    this->parent_->publish(this->topic_.value(x...), m);
+    // See PublishAction::play in automation.h for the save/restore rationale.
+    if (this->retransmit_count_.has_value()) {{
+      uint8_t saved = this->parent_->get_retransmit_count();
+      this->parent_->set_retransmit_count(this->retransmit_count_.value(x...));
+      this->parent_->publish(this->topic_.value(x...), m);
+      this->parent_->set_retransmit_count(saved);
+    }} else {{
+      this->parent_->publish(this->topic_.value(x...), m);
+    }}
   }}
 }};
 
