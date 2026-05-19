@@ -1,0 +1,30 @@
+# Example config for the MQTT <-> multicast_pubsub bridge.
+#
+# Each entry under bridges: is one-directional. To mirror a topic both ways,
+# declare two entries (with different mqtt_topic/mpubsub_topic names to avoid
+# accidental feedback loops via broker-echoed messages).
+
+mqtt:
+  broker: tcp://127.0.0.1:1883
+  client_id: multicast-pubsub-bridge
+  # username: optional
+  # password: optional
+  qos: 0
+  retain: false
+
+multicast_pubsub:
+  port: 18512
+  scope: link-local          # link-local | site-local | organization-local
+  hops: 1
+  # interface: eth0          # optional; defaults to the kernel-picked egress
+
+bridges:
+  # Take temperature published over MQTT and rebroadcast on multicast.
+  - direction: mqtt_to_mpubsub
+    mqtt_topic: "home/bridge/in/temp"
+    mpubsub_topic: "home/livingroom/temp"
+
+  # Take a multicast message and republish it to MQTT.
+  - direction: mpubsub_to_mqtt
+    mpubsub_topic: "home/livingroom/temp"
+    mqtt_topic: "home/bridge/out/temp"
