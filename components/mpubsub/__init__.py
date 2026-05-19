@@ -66,6 +66,7 @@ CONF_TAG = "tag"
 CONF_MESSAGE = "message"
 CONF_REPEATED = "repeated"
 CONF_VALUES = "values"
+CONF_REQUIRE_ENCRYPTION = "require_encryption"
 
 SCOPES = {
     "link-local": Scope.LINK_LOCAL,
@@ -252,6 +253,7 @@ def _on_message_validator(config):
             cv.GenerateID(CONF_TRIGGER_ID): cv.declare_id(OnMessageTrigger),
             cv.Required(CONF_TOPIC): _topic_validator,
             cv.Optional(CONF_MESSAGE): _message_id_validator,
+            cv.Optional(CONF_REQUIRE_ENCRYPTION, default=False): cv.boolean,
         }
     )(config)
 
@@ -320,6 +322,20 @@ def _final_validate(config):
                 f"under `messages:`. Known: {sorted(declared) or '(none)'}",
                 path=[CONF_ON_MESSAGE, i, CONF_MESSAGE],
             )
+
+    # require_encryption on any subscription requires the parent mpubsub:
+    # block to have configured an encryption key -- otherwise the receiver
+    # has no key to decrypt with and the marked topic would deliver nothing.
+    if CONF_ENCRYPTION not in config:
+        for i, trig in enumerate(config.get(CONF_ON_MESSAGE, [])):
+            if trig.get(CONF_REQUIRE_ENCRYPTION):
+                raise cv.Invalid(
+                    "on_message `require_encryption: true` needs an "
+                    "`encryption: key:` block on the parent mpubsub: "
+                    "component (otherwise the receiver has no key and "
+                    "every packet for this topic would be dropped).",
+                    path=[CONF_ON_MESSAGE, i, CONF_REQUIRE_ENCRYPTION],
+                )
     return config
 
 
@@ -429,6 +445,7 @@ async def to_code(config):
         cg.add(getattr(var, setter)(s_var))
 
     for conf in config.get(CONF_ON_MESSAGE, []):
+        require_enc = conf.get(CONF_REQUIRE_ENCRYPTION, False)
         if CONF_MESSAGE in conf:
             # Typed receive: instantiate the generated On<Pascal>Trigger
             # class that subscribes via subscribe_typed<T> and emits the
@@ -442,13 +459,13 @@ async def to_code(config):
             # produces the right C++ type.
             trigger_id = conf[CONF_TRIGGER_ID]
             trigger_id.type = trigger_cls
-            trigger = cg.new_Pvariable(trigger_id, var, conf[CONF_TOPIC])
+            trigger = cg.new_Pvariable(trigger_id, var, conf[CONF_TOPIC], require_enc)
             # Trigger<T> hands the user lambda `T x` by value, matching the
             # `Trigger<MsgStruct>` base of the generated trigger class.
             await automation.build_automation(trigger, [(msg_struct, "x")], conf)
         else:
             # Raw receive: bytes vector argument, original behavior.
-            trigger = cg.new_Pvariable(conf[CONF_TRIGGER_ID], var, conf[CONF_TOPIC])
+            trigger = cg.new_Pvariable(conf[CONF_TRIGGER_ID], var, conf[CONF_TOPIC], require_enc)
             await automation.build_automation(
                 trigger, [(cg.std_vector.template(cg.uint8), "x")], conf
             )

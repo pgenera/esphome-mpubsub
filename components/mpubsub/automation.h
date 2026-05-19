@@ -46,10 +46,13 @@ template<typename... Ts> class PublishAction : public Action<Ts...> {
 
 class OnMessageTrigger : public Trigger<std::vector<uint8_t>> {
  public:
-  OnMessageTrigger(MulticastPubSub *parent, const std::string &topic) {
-    parent->subscribe(topic, [this](std::span<const uint8_t> payload) {
-      this->trigger(std::vector<uint8_t>(payload.begin(), payload.end()));
-    });
+  OnMessageTrigger(MulticastPubSub *parent, const std::string &topic, bool require_encryption = false) {
+    parent->subscribe(
+        topic,
+        [this](std::span<const uint8_t> payload) {
+          this->trigger(std::vector<uint8_t>(payload.begin(), payload.end()));
+        },
+        require_encryption);
   }
 };
 

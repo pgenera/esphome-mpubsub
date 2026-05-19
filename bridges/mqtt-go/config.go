@@ -58,12 +58,34 @@ type MPubsubConfig struct {
 	//   QoS 2  → -1 (indefinite, capped by the topic-supersede rule)
 	// Default false to keep behavior predictable.
 	PromoteQoS bool `yaml:"promote_qos"`
+
+	// Encryption mirrors the C++ `mpubsub: encryption: key:` block: a
+	// passphrase that's SHA-256'd to a 32-byte XXTEA-256 key. When set, the
+	// bridge encrypts every mqtt → mpubsub publish and can decrypt encrypted
+	// mpubsub → mqtt packets. Leave empty for plaintext.
+	Encryption EncryptionConfig `yaml:"encryption"`
+
+	// EncryptionKey is the 32-byte SHA-256 of Encryption.Key, derived at
+	// config-load time. Not user-facing; populated by applyDefaults.
+	EncryptionKey []byte `yaml:"-"`
+}
+
+// EncryptionConfig matches the ESPHome packet_transport / mpubsub idiom
+// of `encryption: { key: "..." }` so YAML blocks are familiar.
+type EncryptionConfig struct {
+	Key string `yaml:"key"`
 }
 
 type BridgeEntry struct {
 	Direction    Direction `yaml:"direction"`
 	MQTTTopic    string    `yaml:"mqtt_topic"`
 	MPubsubTopic string    `yaml:"mpubsub_topic"`
+	// RequireEncryption applies only to mpubsub_to_mqtt entries: plaintext
+	// multicast datagrams for this mpubsub topic are dropped at the
+	// receiver instead of being forwarded to MQTT. Mirrors the C++ side's
+	// per-topic require_encryption on on_message / sensor.subscribe.
+	// Setting it requires mpubsub.encryption.key to be configured.
+	RequireEncryption bool `yaml:"require_encryption"`
 }
 
 type Config struct {
@@ -121,6 +143,9 @@ func (c *Config) applyDefaults() error {
 		}
 		c.MPubsub.RetransmitDelay = d
 	}
+	if c.MPubsub.Encryption.Key != "" {
+		c.MPubsub.EncryptionKey = DeriveKey(c.MPubsub.Encryption.Key)
+	}
 	return nil
 }
 
@@ -156,6 +181,15 @@ func (c *Config) validate() error {
 		default:
 			return fmt.Errorf("bridges[%d]: unknown direction %q (want %q or %q)",
 				i, b.Direction, DirMQTTToMPubsub, DirMPubsubToMQTT)
+		}
+		if b.RequireEncryption {
+			if b.Direction != DirMPubsubToMQTT {
+				return fmt.Errorf("bridges[%d]: require_encryption is only valid for mpubsub_to_mqtt entries (this one is %s)",
+					i, b.Direction)
+			}
+			if len(c.MPubsub.EncryptionKey) == 0 {
+				return fmt.Errorf("bridges[%d]: require_encryption needs mpubsub.encryption.key to be set", i)
+			}
 		}
 	}
 	return nil

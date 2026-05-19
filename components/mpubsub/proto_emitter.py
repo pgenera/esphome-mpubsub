@@ -470,11 +470,12 @@ namespace esphome::multicast_pubsub {{
 // passed into the user lambda is the fully-decoded struct, not raw bytes.
 class On{struct_name}Trigger : public esphome::Trigger<esphome::multicast_pubsub::messages::{struct_name}> {{
  public:
-  On{struct_name}Trigger(MulticastPubSub *parent, const std::string &topic) {{
+  On{struct_name}Trigger(MulticastPubSub *parent, const std::string &topic, bool require_encryption = false) {{
     parent->subscribe_typed<esphome::multicast_pubsub::messages::{struct_name}>(
         topic, [this](const esphome::multicast_pubsub::messages::{struct_name} &m) {{
           this->trigger(m);
-        }});
+        }},
+        require_encryption);
   }}
 }};
 

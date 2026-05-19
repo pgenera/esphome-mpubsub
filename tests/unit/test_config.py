@@ -280,3 +280,38 @@ def test_accepts_publish_action_in_automation(tmp_path: Path) -> None:
     )
     r = _esphome_config(_wrap(body), tmp_path)
     assert "Configuration is valid" in (r.stdout + r.stderr), r.stdout + r.stderr
+
+
+def test_rejects_require_encryption_without_key(tmp_path: Path) -> None:
+    """require_encryption needs an encryption key configured -- otherwise
+    every packet for the topic would be dropped at the receiver."""
+    body = textwrap.dedent(
+        """\
+        mpubsub:
+          on_message:
+            - topic: "test/secret"
+              require_encryption: true
+              then:
+                - logger.log: "hi"
+        """
+    )
+    r = _esphome_config(_wrap(body), tmp_path)
+    assert r.returncode != 0
+    assert "require_encryption" in (r.stdout + r.stderr)
+
+
+def test_accepts_require_encryption_with_key(tmp_path: Path) -> None:
+    body = textwrap.dedent(
+        """\
+        mpubsub:
+          encryption:
+            key: "passphrase"
+          on_message:
+            - topic: "test/secret"
+              require_encryption: true
+              then:
+                - logger.log: "hi"
+        """
+    )
+    r = _esphome_config(_wrap(body), tmp_path)
+    assert "Configuration is valid" in (r.stdout + r.stderr), r.stdout + r.stderr

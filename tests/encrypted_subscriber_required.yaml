@@ -1,0 +1,35 @@
+esphome:
+  name: pubsub-sub-required
+
+host:
+
+logger:
+  level: VERBOSE
+
+external_components:
+  - source:
+      type: local
+      path: ../components
+    components: [mpubsub]
+
+mpubsub:
+  port: 18512
+  scope: link-local
+  hops: 1
+  encryption:
+    key: "shared-test-secret"
+  on_message:
+    - topic: "test/temp"
+      require_encryption: true
+      then:
+        - logger.log:
+            format: "received require_encryption msg of %u bytes"
+            args: ['x.size()']
+
+sensor:
+  - platform: mpubsub
+    topic: "test/temp"
+    name: "Subscribed Temperature"
+    mode: subscribe
+    require_encryption: true
+    accuracy_decimals: 1

@@ -27,6 +27,7 @@ import esphome.config_validation as cv
 from esphome.const import CONF_ID, CONF_MODE
 
 from . import (
+    CONF_REQUIRE_ENCRYPTION,
     CONF_TOPIC,
     MulticastPubSub,
     _topic_validator,
@@ -52,6 +53,9 @@ CONFIG_SCHEMA = (
             cv.GenerateID(CONF_PARENT_ID): cv.use_id(MulticastPubSub),
             cv.Required(CONF_TOPIC): _topic_validator,
             cv.Optional(CONF_MODE, default=MODE_SUBSCRIBE): cv.one_of(*MODES, lower=True),
+            # Subscribe-side only; ignored on publish. Plaintext datagrams
+            # for this topic are dropped at dispatch (encryption-only topic).
+            cv.Optional(CONF_REQUIRE_ENCRYPTION, default=False): cv.boolean,
         }
     )
     .extend(cv.COMPONENT_SCHEMA)
@@ -67,3 +71,4 @@ async def to_code(config):
     mode = config[CONF_MODE]
     cg.add(var.set_subscribe(mode == MODE_SUBSCRIBE))
     cg.add(var.set_publish(mode == MODE_PUBLISH))
+    cg.add(var.set_require_encryption(config[CONF_REQUIRE_ENCRYPTION]))

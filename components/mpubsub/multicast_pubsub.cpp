@@ -184,20 +184,24 @@ Subscription *MulticastPubSub::find_subscription_(const std::string &topic) {
   return nullptr;
 }
 
-Subscription *MulticastPubSub::find_or_create_subscription_(const std::string &topic) {
-  if (Subscription *existing = this->find_subscription_(topic))
+Subscription *MulticastPubSub::find_or_create_subscription_(const std::string &topic, bool require_encryption) {
+  if (Subscription *existing = this->find_subscription_(topic)) {
+    if (require_encryption)
+      existing->require_encryption = true;
     return existing;
+  }
   Subscription sub;
   sub.topic = topic;
   sub.crc = topic_crc32(topic);
   sub.group = topic_to_group(topic, this->scope_);
   sub.joined = false;  // loop() picks it up once netif_default is available
+  sub.require_encryption = require_encryption;
   this->subscriptions_.push_back(std::move(sub));
   return &this->subscriptions_.back();
 }
 
-void MulticastPubSub::subscribe(const std::string &topic, MessageCallback cb) {
-  Subscription *sub = this->find_or_create_subscription_(topic);
+void MulticastPubSub::subscribe(const std::string &topic, MessageCallback cb, bool require_encryption) {
+  Subscription *sub = this->find_or_create_subscription_(topic, require_encryption);
   sub->raw_callbacks.push_back(std::move(cb));
 }
 
@@ -320,16 +324,20 @@ void MulticastPubSub::on_packet_(std::span<const uint8_t> raw) {
                    reinterpret_cast<const uint32_t *>(this->encryption_key_bytes_));
     uint32_t crc = uint32_t(work[0]) | (uint32_t(work[1]) << 8) | (uint32_t(work[2]) << 16) | (uint32_t(work[3]) << 24);
     std::span<const uint8_t> body(work.data() + 4, pkt.plaintext_len);
-    this->deliver_(crc, pkt.encoding, body);
+    this->deliver_(crc, pkt.encoding, body, /*was_encrypted=*/true);
     return;
   }
-  this->deliver_(pkt.topic_crc, pkt.encoding, pkt.payload);
+  this->deliver_(pkt.topic_crc, pkt.encoding, pkt.payload, /*was_encrypted=*/false);
 }
 
-void MulticastPubSub::deliver_(uint32_t crc, Encoding encoding, std::span<const uint8_t> payload) {
+void MulticastPubSub::deliver_(uint32_t crc, Encoding encoding, std::span<const uint8_t> payload, bool was_encrypted) {
   for (auto &sub : this->subscriptions_) {
     if (sub.crc != crc)
       continue;
+    if (sub.require_encryption && !was_encrypted) {
+      ESP_LOGV(TAG, "drop plaintext packet for encryption-required topic '%s'", sub.topic.c_str());
+      continue;
+    }
     if (encoding == Encoding::RAW) {
       for (auto &cb : sub.raw_callbacks)
         cb(payload);
@@ -508,10 +516,10 @@ void MulticastPubSub::on_packet_(std::span<const uint8_t> raw) {
                    reinterpret_cast<const uint32_t *>(this->encryption_key_bytes_));
     uint32_t crc = uint32_t(work[0]) | (uint32_t(work[1]) << 8) | (uint32_t(work[2]) << 16) | (uint32_t(work[3]) << 24);
     std::span<const uint8_t> body(work.data() + 4, pkt.plaintext_len);
-    this->deliver_(crc, pkt.encoding, body);
+    this->deliver_(crc, pkt.encoding, body, /*was_encrypted=*/true);
     return;
   }
-  this->deliver_(pkt.topic_crc, pkt.encoding, pkt.payload);
+  this->deliver_(pkt.topic_crc, pkt.encoding, pkt.payload, /*was_encrypted=*/false);
 }
 
 void MulticastPubSub::publish_metrics_() {
@@ -572,13 +580,17 @@ Subscription *MulticastPubSub::find_subscription_(const std::string &topic) {
   return nullptr;
 }
 
-Subscription *MulticastPubSub::find_or_create_subscription_(const std::string &topic) {
-  if (Subscription *existing = this->find_subscription_(topic))
+Subscription *MulticastPubSub::find_or_create_subscription_(const std::string &topic, bool require_encryption) {
+  if (Subscription *existing = this->find_subscription_(topic)) {
+    if (require_encryption)
+      existing->require_encryption = true;
     return existing;
+  }
   Subscription sub;
   sub.topic = topic;
   sub.crc = topic_crc32(topic);
   sub.group = topic_to_group(topic, this->scope_);
+  sub.require_encryption = require_encryption;
   this->subscriptions_.push_back(std::move(sub));
   // Group join happens in setup() for subscriptions registered before then;
   // for late subscriptions, join immediately so we start receiving.
@@ -594,8 +606,8 @@ Subscription *MulticastPubSub::find_or_create_subscription_(const std::string &t
   return &this->subscriptions_.back();
 }
 
-void MulticastPubSub::subscribe(const std::string &topic, MessageCallback cb) {
-  Subscription *sub = this->find_or_create_subscription_(topic);
+void MulticastPubSub::subscribe(const std::string &topic, MessageCallback cb, bool require_encryption) {
+  Subscription *sub = this->find_or_create_subscription_(topic, require_encryption);
   sub->raw_callbacks.push_back(std::move(cb));
 }
 
@@ -681,10 +693,14 @@ bool MulticastPubSub::publish_dynamic(const std::string &topic, uint16_t schema_
   return this->publish(topic, std::span<const uint8_t>(buf.data(), 2 + proto_bytes.size()), Encoding::PROTOBUF);
 }
 
-void MulticastPubSub::deliver_(uint32_t crc, Encoding encoding, std::span<const uint8_t> payload) {
+void MulticastPubSub::deliver_(uint32_t crc, Encoding encoding, std::span<const uint8_t> payload, bool was_encrypted) {
   for (auto &sub : this->subscriptions_) {
     if (sub.crc != crc)
       continue;
+    if (sub.require_encryption && !was_encrypted) {
+      ESP_LOGV(TAG, "drop plaintext packet for encryption-required topic '%s'", sub.topic.c_str());
+      continue;
+    }
     if (encoding == Encoding::RAW) {
       for (auto &cb : sub.raw_callbacks)
         cb(payload);

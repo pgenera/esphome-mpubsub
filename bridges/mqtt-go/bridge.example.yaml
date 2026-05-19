@@ -21,6 +21,12 @@ mpubsub:
   promote_qos: false         # raise effective retransmit_count based on incoming MQTT QoS
   # interface: eth0          # optional; defaults to the kernel-picked egress
 
+  # Optional XXTEA-256 payload encryption. Must match the key set on the
+  # ESPHome device(s) via `mpubsub.encryption.key:` -- the bridge SHA-256's
+  # this passphrase the same way packet_transport does.
+  # encryption:
+  #   key: "any-length passphrase"
+
 bridges:
   # Take temperature published over MQTT and rebroadcast on multicast.
   - direction: mqtt_to_mpubsub
@@ -31,3 +37,6 @@ bridges:
   - direction: mpubsub_to_mqtt
     mpubsub_topic: "home/livingroom/temp"
     mqtt_topic: "home/bridge/out/temp"
+    # require_encryption: true   # drop plaintext datagrams for this topic
+                                 # (only valid on mpubsub_to_mqtt entries;
+                                 #  requires mpubsub.encryption.key)

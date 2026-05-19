@@ -58,6 +58,12 @@ struct Subscription {
   // as joined-at-creation (which it is, via IPV6_JOIN_GROUP in setup()
   // or find_or_create_subscription_).
   bool joined{true};
+  // When set, plaintext datagrams for this topic are dropped at dispatch
+  // (the topic is encryption-only on this receiver). Multiple subscribers
+  // for the same topic OR their require_encryption flags together: if any
+  // caller demands encryption, plaintext is dropped for every callback on
+  // the subscription. Default false preserves legacy behavior.
+  bool require_encryption{false};
 };
 
 class MulticastPubSub : public Component {
@@ -96,15 +102,21 @@ class MulticastPubSub : public Component {
   float get_setup_priority() const override { return setup_priority::AFTER_WIFI; }
 
   // Subscribe `cb` to ENCODING=RAW messages on `topic`. Multiple callbacks
-  // per topic are supported; the first subscription joins the multicast group.
-  void subscribe(const std::string &topic, MessageCallback cb);
+  // per topic are supported; the first subscription joins the multicast
+  // group. `require_encryption=true` marks the topic as encryption-only on
+  // this receiver: plaintext packets for `topic` are dropped at dispatch.
+  // The flag is sticky -- once any caller sets it, the topic stays
+  // encryption-only for every callback on it.
+  void subscribe(const std::string &topic, MessageCallback cb, bool require_encryption = false);
 
   // Subscribe `cb` to ENCODING=PROTOBUF messages on `topic` whose SCHEMA_ID
   // matches T::SCHEMA_ID. The lambda receives the decoded typed struct.
   // The protobuf body is decoded via T::decode (inherited from
-  // esphome::api::ProtoDecodableMessage).
-  template<typename T> void subscribe_typed(const std::string &topic, std::function<void(const T &)> cb) {
-    Subscription *sub = this->find_or_create_subscription_(topic);
+  // esphome::api::ProtoDecodableMessage). See subscribe() for the meaning
+  // of `require_encryption`.
+  template<typename T> void subscribe_typed(const std::string &topic, std::function<void(const T &)> cb,
+                                            bool require_encryption = false) {
+    Subscription *sub = this->find_or_create_subscription_(topic, require_encryption);
     sub->typed_callbacks.push_back(TypedCallback{
         T::SCHEMA_ID,
         [cb = std::move(cb)](std::span<const uint8_t> body) {
@@ -169,11 +181,13 @@ class MulticastPubSub : public Component {
   void set_packets_received_sensor(sensor::Sensor *s) { this->packets_received_sensor_ = s; }
 
  protected:
-  void deliver_(uint32_t crc, Encoding encoding, std::span<const uint8_t> payload);
+  void deliver_(uint32_t crc, Encoding encoding, std::span<const uint8_t> payload, bool was_encrypted);
   Subscription *find_subscription_(const std::string &topic);
   // Look up `topic` -- create + join the multicast group if missing.
-  // Used by both raw subscribe() and typed subscribe_typed<T>().
-  Subscription *find_or_create_subscription_(const std::string &topic);
+  // Used by both raw subscribe() and typed subscribe_typed<T>(). The
+  // require_encryption flag is OR'd into the subscription on every call;
+  // once set true, it stays set for the lifetime of the component.
+  Subscription *find_or_create_subscription_(const std::string &topic, bool require_encryption = false);
   // Common path for an incoming datagram: validate, count, dispatch.
   // Called from loop() on socket-based platforms and from the lwip
   // recv callback on ESP8266.

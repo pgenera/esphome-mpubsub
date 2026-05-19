@@ -36,7 +36,8 @@ type Bridge struct {
 }
 
 type mpubsubToMQTTRoute struct {
-	MQTTTopic string
+	MQTTTopic         string
+	RequireEncryption bool
 }
 
 func NewBridge(cfg *Config, log *slog.Logger) (*Bridge, error) {
@@ -107,10 +108,14 @@ func (b *Bridge) Run(ctx context.Context) error {
 				return err
 			}
 			crc := TopicCRC32(entry.MPubsubTopic)
-			b.crcToMQTT[crc] = append(b.crcToMQTT[crc], mpubsubToMQTTRoute{MQTTTopic: entry.MQTTTopic})
+			b.crcToMQTT[crc] = append(b.crcToMQTT[crc], mpubsubToMQTTRoute{
+				MQTTTopic:         entry.MQTTTopic,
+				RequireEncryption: entry.RequireEncryption,
+			})
 			b.log.Info("joined mpubsub -> mqtt",
 				"mpubsub_topic", entry.MPubsubTopic, "mqtt_topic", entry.MQTTTopic,
-				"group", group.String(), "crc", crc)
+				"group", group.String(), "crc", crc,
+				"require_encryption", entry.RequireEncryption)
 		}
 	}
 
@@ -139,7 +144,7 @@ func (b *Bridge) Run(ctx context.Context) error {
 }
 
 func (b *Bridge) handleMQTTMessage(mpubsubTopic string, group net.IP, msg mqtt.Message) {
-	pkt, err := EncodePacket(mpubsubTopic, msg.Payload(), encodingRaw)
+	pkt, err := EncodePacket(mpubsubTopic, msg.Payload(), encodingRaw, b.cfg.MPubsub.EncryptionKey)
 	if err != nil {
 		b.log.Warn("encode packet failed",
 			"mqtt_topic", msg.Topic(), "mpubsub_topic", mpubsubTopic, "err", err)
@@ -269,7 +274,7 @@ func (b *Bridge) mcastReceiveLoop(ctx context.Context) {
 			b.log.Warn("mcast read error", "err", err)
 			continue
 		}
-		pkt, err := DecodePacket(buf[:n])
+		pkt, err := DecodePacket(buf[:n], b.cfg.MPubsub.EncryptionKey)
 		if err != nil {
 			b.log.Debug("dropped packet", "err", err, "bytes", n)
 			continue
@@ -287,6 +292,11 @@ func (b *Bridge) mcastReceiveLoop(ctx context.Context) {
 			continue
 		}
 		for _, r := range routes {
+			if r.RequireEncryption && !pkt.WasEncrypted {
+				b.log.Debug("drop plaintext packet for require_encryption route",
+					"mpubsub_crc", pkt.TopicCRC, "mqtt_topic", r.MQTTTopic)
+				continue
+			}
 			t := b.mqtt.Publish(r.MQTTTopic, b.cfg.MQTT.QoS, b.cfg.MQTT.Retain, pkt.Payload)
 			// Don't block the multicast loop on broker round-trips. Log
 			// failures asynchronously.

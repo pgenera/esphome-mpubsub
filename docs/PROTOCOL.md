@@ -202,7 +202,11 @@ passive observer.
 **Mixed-mode deployments.** Receivers that have an encryption key
 configured accept both `ENC_MODE = NONE` and `ENC_MODE = XXTEA` packets —
 the decoder picks the path from the header byte. Receivers without a key
-configured drop encrypted packets.
+configured drop encrypted packets. Individual subscriptions can opt in to
+encryption-only mode by setting `require_encryption: true` on an
+`on_message:` entry or on a `sensor: platform: mpubsub` block; plaintext
+datagrams for that topic are then dropped at dispatch regardless of what
+other subscribers want.
 
 **Security caveats.** This scheme provides **confidentiality and weak
 integrity** within the threat model of "passive eavesdroppers and

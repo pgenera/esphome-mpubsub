@@ -22,6 +22,7 @@ class MulticastSensor : public sensor::Sensor, public Component {
   void set_topic(const std::string &topic) { this->topic_ = topic; }
   void set_subscribe(bool v) { this->subscribe_ = v; }
   void set_publish(bool v) { this->publish_ = v; }
+  void set_require_encryption(bool v) { this->require_encryption_ = v; }
 
   void setup() override {
     if (this->subscribe_) {
@@ -37,7 +38,7 @@ class MulticastSensor : public sensor::Sensor, public Component {
         if (end == buf)
           return;  // not a number; silently drop
         this->publish_state(v);
-      });
+      }, this->require_encryption_);
     }
     if (this->publish_) {
       this->add_on_state_callback([this](float state) {
@@ -62,6 +63,7 @@ class MulticastSensor : public sensor::Sensor, public Component {
   std::string topic_;
   bool subscribe_{true};
   bool publish_{false};
+  bool require_encryption_{false};
 };
 
 }  // namespace esphome::multicast_pubsub
