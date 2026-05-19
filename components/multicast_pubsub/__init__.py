@@ -198,6 +198,22 @@ def _messages_validator(value):
     return value
 
 
+def _retransmit_count_validator(value):
+    """Accept 1..255 (finite) or -1 (indefinite). Reject 0 and anything else.
+
+    Cross-field "delay >= 1s when count is -1" is enforced in
+    FINAL_VALIDATE_SCHEMA where we can see both fields at once.
+    """
+    value = cv.int_(value)
+    if value == -1:
+        return value
+    if value < 1 or value > 255:
+        raise cv.Invalid(
+            f"retransmit_count must be 1..255 or -1 (indefinite); got {value}"
+        )
+    return value
+
+
 def _topic_validator(value):
     """Validate a pub/sub topic.
 
@@ -241,7 +257,7 @@ CONFIG_SCHEMA = cv.Schema(
         cv.Optional(CONF_PORT, default=18512): cv.port,
         cv.Optional(CONF_SCOPE, default="link-local"): cv.enum(SCOPES, lower=True),
         cv.Optional(CONF_HOPS, default=1): cv.int_range(min=1, max=255),
-        cv.Optional(CONF_RETRANSMIT_COUNT, default=1): cv.int_range(min=1, max=255),
+        cv.Optional(CONF_RETRANSMIT_COUNT, default=1): _retransmit_count_validator,
         cv.Optional(CONF_RETRANSMIT_DELAY, default="100ms"): cv.positive_time_period_milliseconds,
         cv.Optional(CONF_MESSAGES, default=list): _messages_validator,
         cv.Optional(CONF_ON_MESSAGE): _on_message_validator,
@@ -266,6 +282,18 @@ def _final_validate(config):
                 "`api:` section to your YAML, or remove the `messages:` block "
                 "to stick to raw payloads.",
                 path=[CONF_MESSAGES],
+            )
+
+    # Indefinite retransmit needs a non-trivial spacing so the device
+    # doesn't saturate the link. We pick 1s as the minimum -- shorter
+    # intervals are almost certainly a misconfiguration.
+    if config.get(CONF_RETRANSMIT_COUNT) == -1:
+        delay = config.get(CONF_RETRANSMIT_DELAY)
+        if delay is not None and delay.total_milliseconds < 1000:
+            raise cv.Invalid(
+                "retransmit_count: -1 (indefinite) requires "
+                "retransmit_delay >= 1s",
+                path=[CONF_RETRANSMIT_DELAY],
             )
 
     declared = {m[CONF_ID] for m in config.get(CONF_MESSAGES, [])}
@@ -424,9 +452,11 @@ PUBLISH_ACTION_SCHEMA = cv.All(
             cv.Optional(CONF_PAYLOAD): cv.templatable(_static_payload_validator),
             cv.Optional(CONF_MESSAGE): _message_id_validator,
             # Per-call override of the component-level retransmit_count.
-            # Same range as the component option (1..255).
+            # Same range as the component option (1..255 or -1 indefinite).
+            # No cross-field delay check here -- runtime uses the
+            # component's configured retransmit_delay either way.
             cv.Optional(CONF_RETRANSMIT_COUNT): cv.templatable(
-                cv.int_range(min=1, max=255)
+                _retransmit_count_validator
             ),
             # Values are validated lazily -- per-field type-coercion happens
             # at codegen time when we know which message they belong to.
@@ -508,7 +538,7 @@ async def publish_action_to_code(config, action_id, template_arg, args):
 
     if CONF_RETRANSMIT_COUNT in config:
         rc_tpl = await cg.templatable(
-            config[CONF_RETRANSMIT_COUNT], args, cg.uint8
+            config[CONF_RETRANSMIT_COUNT], args, cg.int16
         )
         cg.add(var.set_retransmit_count(rc_tpl))
 

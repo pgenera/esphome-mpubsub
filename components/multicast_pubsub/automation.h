@@ -18,8 +18,9 @@ template<typename... Ts> class PublishAction : public Action<Ts...> {
   TEMPLATABLE_VALUE(std::string, topic)
   TEMPLATABLE_VALUE(std::string, payload)
   // Per-call override of the component-level retransmit_count. If not
-  // set the parent's configured default is used.
-  TEMPLATABLE_VALUE(uint8_t, retransmit_count)
+  // set the parent's configured default is used. -1 means indefinite
+  // (subsequent publish() to the same topic supersedes it).
+  TEMPLATABLE_VALUE(int16_t, retransmit_count)
 
   void play(Ts... x) override {
     auto t = this->topic_.value(x...);
@@ -30,7 +31,7 @@ template<typename... Ts> class PublishAction : public Action<Ts...> {
     // and the set_timeout lambdas only re-send the captured datagram --
     // they don't re-read the count -- so restoring afterwards is safe.
     if (this->retransmit_count_.has_value()) {
-      uint8_t saved = this->parent_->get_retransmit_count();
+      int16_t saved = this->parent_->get_retransmit_count();
       this->parent_->set_retransmit_count(this->retransmit_count_.value(x...));
       this->parent_->publish(t, p);
       this->parent_->set_retransmit_count(saved);

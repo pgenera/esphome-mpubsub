@@ -28,8 +28,8 @@ multicast_pubsub:
 | `port`       | no       | uint16   | `18512`       | UDP port. Both publishers and subscribers must use the same value. Adjacent to ESPHome's `udp:` default (18511). |
 | `scope`      | no       | enum     | `link-local`  | IPv6 multicast scope. See `docs/PROTOCOL.md` §2.1.                          |
 | `hops`       | no       | int 1–255| `1`           | `IPV6_MULTICAST_HOPS`. Raise above 1 if you need multi-subnet routing.      |
-| `retransmit_count` | no | int 1–255 | `1` | Number of UDP datagrams emitted per `publish()` call. `1` (default) = no retransmission. The first packet is always sent synchronously; the rest are scheduled non-blocking via `Component::set_timeout`. |
-| `retransmit_delay` | no | time period ≥0 | `100ms` | Spacing between successive sends. `0ms` is supported (resends fire on consecutive loop iterations). |
+| `retransmit_count` | no | int 1–255, or `-1` | `1` | Number of UDP datagrams emitted per `publish()` call. `1` (default) = no retransmission. The first packet is always sent synchronously; the rest are scheduled non-blocking via `Component::set_timeout`. **`-1`** = indefinite: keep retransmitting at `retransmit_delay` until another `publish()` for the *same topic* supersedes it (requires `retransmit_delay >= 1s`). |
+| `retransmit_delay` | no | time period ≥0 | `100ms` | Spacing between successive sends. `0ms` is supported for finite counts (resends fire on consecutive loop iterations). With `retransmit_count: -1` the minimum is `1s` to avoid saturating the link. |
 | `on_message` | no       | list     | empty         | Topic-keyed triggers. The trigger argument `x` is `std::vector<uint8_t>`.   |
 | `messages`   | no       | list     | empty         | Typed protobuf message schemas. Each entry generates a C++ struct named after `id` (PascalCase). Requires `api:` to also be configured (we use its protobuf primitives). |
 
@@ -52,7 +52,7 @@ on_...:
 | `id`      | no       | id               | Pick a specific `multicast_pubsub:` instance.                                          |
 | `topic`   | yes      | templatable str  | UTF-8, non-empty, ≤200 bytes, no NUL.                                                  |
 | `payload` | yes      | templatable str  | Raw bytes-as-string. Maximum 1220 bytes; literals over the limit are rejected at config time. |
-| `retransmit_count` | no | templatable int 1–255 | Override the component-level `retransmit_count` for this one publish. Useful for "critical" messages (door open/close, alarm trips) that warrant more aggressive resending without raising the global rate. |
+| `retransmit_count` | no | templatable int 1–255 or `-1` | Override the component-level `retransmit_count` for this one publish. Useful for "critical" messages (door open/close, alarm trips) that warrant more aggressive resending without raising the global rate. `-1` activates indefinite mode for the topic; a subsequent publish to the same topic ends it. The component-level `retransmit_delay` is used either way -- the per-action override doesn't carry its own delay. |
 
 If `payload` is a runtime lambda we can't size-check at config time. An
 oversize payload at runtime is logged at `ERROR` level and the publish call
@@ -76,7 +76,7 @@ on_value:
 |-----------|:--------:|-------------------------------|----------------------------------------------------------------------------------------------------|
 | `message` | yes      | id                            | A messages: entry id declared on a `multicast_pubsub:` instance in the same config.                |
 | `values`  | yes      | mapping `field → templatable` | One entry per field. Missing fields default to zero/empty. Unknown field names fail config-validation. |
-| `retransmit_count` | no | templatable int 1–255       | Per-publish override of the component-level `retransmit_count`, same semantics as the raw-publish form. |
+| `retransmit_count` | no | templatable int 1–255 or `-1` | Per-publish override of the component-level `retransmit_count`, same semantics as the raw-publish form (including `-1` for indefinite mode). |
 
 Per-field value forms:
 

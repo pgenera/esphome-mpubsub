@@ -8,6 +8,7 @@
 #include <memory>
 #include <span>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include "esphome/components/sensor/sensor.h"
@@ -64,11 +65,16 @@ class MulticastPubSub : public Component {
   void set_port(uint16_t port) { this->port_ = port; }
   void set_scope(Scope scope) { this->scope_ = scope; }
   void set_hops(uint8_t hops) { this->hops_ = hops; }
-  // retransmit_count = number of total transmissions per publish() call
-  // (1 = no retransmission). delay is the spacing between successive
-  // sends; the first send is unconditional and synchronous.
-  void set_retransmit_count(uint8_t count) { this->retransmit_count_ = count; }
-  uint8_t get_retransmit_count() const { return this->retransmit_count_; }
+  // retransmit_count = number of total transmissions per publish() call.
+  //   1   : no retransmission (just the synchronous initial send)
+  //   N>1 : send N packets total, (N-1) deferred via set_timeout()
+  //   -1  : keep retransmitting forever at retransmit_delay_ms_ until a
+  //         new publish() for the same topic supersedes it. Requires
+  //         retransmit_delay_ms_ >= 1000 (enforced at config time).
+  // delay is the spacing between successive sends; the first send is
+  // unconditional and synchronous.
+  void set_retransmit_count(int16_t count) { this->retransmit_count_ = count; }
+  int16_t get_retransmit_count() const { return this->retransmit_count_; }
   void set_retransmit_delay_ms(uint32_t delay_ms) { this->retransmit_delay_ms_ = delay_ms; }
 
   void setup() override;
@@ -166,11 +172,19 @@ class MulticastPubSub : public Component {
   // initial publish() send and any retransmits scheduled via set_timeout.
   // Returns false on transport-level failure.
   bool send_datagram_(const std::vector<uint8_t> &datagram, const GroupAddr &group);
-  // If retransmit_count_ > 1, schedule (count-1) deferred resends via the
-  // Component::set_timeout machinery so loop() stays unblocked. The
-  // shared_ptr-captured buffer keeps the encoded packet alive until the
-  // last firing.
-  void schedule_retransmits_(std::shared_ptr<std::vector<uint8_t>> datagram, const GroupAddr &group);
+  // Dispatch retransmits according to retransmit_count_ semantics. For
+  // count > 1, schedules (count-1) deferred resends via set_timeout. For
+  // count == -1, installs a self-rescheduling timeout keyed on the topic
+  // string; a subsequent publish() for the same topic cancels it. The
+  // shared_ptr-captured buffer keeps the encoded packet alive until
+  // either the last finite firing or the indefinite chain is cancelled.
+  void schedule_retransmits_(const std::string &topic,
+                             std::shared_ptr<std::vector<uint8_t>> datagram, const GroupAddr &group);
+  // Cancel any indefinite retransmit chain for this topic. Safe to call
+  // when no chain is active. Always called at the top of publish() so
+  // each new publish replaces any prior indefinite stream cleanly --
+  // even when the new publish has a finite retransmit_count.
+  void cancel_indefinite_retransmit_(const std::string &topic);
 #ifdef USE_ESP8266
   // Join `group` via mld6_joingroup. Called from setup() for groups
   // that exist before the stack is up, and from find_or_create_subscription_
@@ -189,7 +203,7 @@ class MulticastPubSub : public Component {
   uint16_t port_{18512};
   Scope scope_{Scope::LINK_LOCAL};
   uint8_t hops_{1};
-  uint8_t retransmit_count_{1};
+  int16_t retransmit_count_{1};
   uint32_t retransmit_delay_ms_{100};
 
 #ifdef USE_ESP8266
@@ -212,6 +226,12 @@ class MulticastPubSub : public Component {
   // chatty: triggers filters, MQTT, prometheus state churn, ...).
   uint32_t last_published_sent_{UINT32_MAX};
   uint32_t last_published_received_{UINT32_MAX};
+
+  // Active indefinite-retransmit jobs, keyed by topic. Each entry's
+  // std::function reschedules itself via set_timeout("rt:<topic>", ...);
+  // we hold a shared_ptr here as the chain's keepalive. A new publish()
+  // for the same topic erases the entry, cancelling the chain.
+  std::unordered_map<std::string, std::shared_ptr<std::function<void()>>> indefinite_jobs_{};
 };
 
 }  // namespace esphome::multicast_pubsub

@@ -4,6 +4,7 @@
 
 #include <array>
 #include <cerrno>
+#include <cstdio>
 #include <cstring>
 
 #include "esphome/core/log.h"
@@ -148,14 +149,21 @@ void MulticastPubSub::dump_config() {
       scope_name = "organization-local";
       break;
   }
+  char rt_buf[32];
+  if (this->retransmit_count_ == -1) {
+    std::snprintf(rt_buf, sizeof(rt_buf), "indefinite, %u ms apart", this->retransmit_delay_ms_);
+  } else {
+    std::snprintf(rt_buf, sizeof(rt_buf), "%d packet(s), %u ms apart", this->retransmit_count_,
+                  this->retransmit_delay_ms_);
+  }
   ESP_LOGCONFIG(TAG,
                 "Multicast Pub/Sub (ESP8266 / lwip raw):\n"
                 "  Port: %u\n"
                 "  Scope: %s\n"
                 "  Hops: %u\n"
-                "  Retransmit: %u packet(s), %u ms apart\n"
+                "  Retransmit: %s\n"
                 "  Subscriptions: %u",
-                this->port_, scope_name, this->hops_, this->retransmit_count_, this->retransmit_delay_ms_,
+                this->port_, scope_name, this->hops_, rt_buf,
                 static_cast<unsigned>(this->subscriptions_.size()));
   for (const auto &sub : this->subscriptions_) {
     char addr_buf[64];
@@ -217,7 +225,7 @@ bool MulticastPubSub::publish(const std::string &topic, std::span<const uint8_t>
     return false;
   }
   ESP_LOGV(TAG, "published %zu bytes to '%s'", payload.size(), topic.c_str());
-  this->schedule_retransmits_(datagram, group);
+  this->schedule_retransmits_(topic, datagram, group);
   return true;
 }
 
@@ -313,12 +321,46 @@ void MulticastPubSub::publish_metrics_() {
   }
 }
 
-void MulticastPubSub::schedule_retransmits_(std::shared_ptr<std::vector<uint8_t>> datagram, const GroupAddr &group) {
-  // Schedule (count - 1) additional sends via Component::set_timeout, which
-  // is dispatched from loop() so each fire is non-blocking. The shared_ptr
+void MulticastPubSub::cancel_indefinite_retransmit_(const std::string &topic) {
+  auto it = this->indefinite_jobs_.find(topic);
+  if (it != this->indefinite_jobs_.end()) {
+    this->cancel_timeout(topic_crc32(topic));
+    this->indefinite_jobs_.erase(it);
+  }
+}
+
+void MulticastPubSub::schedule_retransmits_(const std::string &topic,
+                                            std::shared_ptr<std::vector<uint8_t>> datagram,
+                                            const GroupAddr &group) {
+  // Every publish() supersedes any prior indefinite chain for the same
+  // topic, regardless of the new publish's retransmit_count.
+  this->cancel_indefinite_retransmit_(topic);
+  if (this->retransmit_count_ == -1) {
+    // Indefinite: self-rescheduling timeout keyed on the topic's CRC32.
+    // Lifecycle is owned by indefinite_jobs_[topic]; the lambda looks
+    // the function back up on each firing and copies it into the next
+    // set_timeout slot. ESPHome's uint32_t-id overload of set_timeout
+    // is used because the std::string overload is deprecated and goes
+    // away in 2026.7.
+    uint32_t delay = this->retransmit_delay_ms_;
+    uint32_t rt_id = topic_crc32(topic);
+    auto fn = std::make_shared<std::function<void()>>();
+    *fn = [this, datagram, group, topic, delay, rt_id]() {
+      this->send_datagram_(*datagram, group);
+      auto it = this->indefinite_jobs_.find(topic);
+      if (it != this->indefinite_jobs_.end()) {
+        this->set_timeout(rt_id, delay, std::function<void()>(*it->second));
+      }
+    };
+    this->indefinite_jobs_[topic] = fn;
+    this->set_timeout(rt_id, delay, std::function<void()>(*fn));
+    return;
+  }
+  // Finite: schedule (count - 1) additional sends via Component::set_timeout,
+  // dispatched from loop() so each fire is non-blocking. The shared_ptr
   // captured by value in each lambda keeps the buffer alive until the
   // final firing.
-  for (uint8_t i = 1; i < this->retransmit_count_; i++) {
+  for (int16_t i = 1; i < this->retransmit_count_; i++) {
     this->set_timeout(this->retransmit_delay_ms_ * i, [this, datagram, group]() {
       this->send_datagram_(*datagram, group);
     });
@@ -433,14 +475,21 @@ void MulticastPubSub::dump_config() {
       scope_name = "organization-local";
       break;
   }
+  char rt_buf[32];
+  if (this->retransmit_count_ == -1) {
+    std::snprintf(rt_buf, sizeof(rt_buf), "indefinite, %u ms apart", this->retransmit_delay_ms_);
+  } else {
+    std::snprintf(rt_buf, sizeof(rt_buf), "%d packet(s), %u ms apart", this->retransmit_count_,
+                  this->retransmit_delay_ms_);
+  }
   ESP_LOGCONFIG(TAG,
                 "Multicast Pub/Sub:\n"
                 "  Port: %u\n"
                 "  Scope: %s\n"
                 "  Hops: %u\n"
-                "  Retransmit: %u packet(s), %u ms apart\n"
+                "  Retransmit: %s\n"
                 "  Subscriptions: %u",
-                this->port_, scope_name, this->hops_, this->retransmit_count_, this->retransmit_delay_ms_,
+                this->port_, scope_name, this->hops_, rt_buf,
                 static_cast<unsigned>(this->subscriptions_.size()));
   for (const auto &sub : this->subscriptions_) {
     char addr_buf[64];
@@ -508,7 +557,7 @@ bool MulticastPubSub::publish(const std::string &topic, std::span<const uint8_t>
     return false;
   }
   ESP_LOGV(TAG, "published %zu bytes to '%s'", payload.size(), topic.c_str());
-  this->schedule_retransmits_(datagram, group);
+  this->schedule_retransmits_(topic, datagram, group);
   return true;
 }
 
@@ -578,14 +627,35 @@ void MulticastPubSub::deliver_(uint32_t crc, Encoding encoding, std::span<const 
   }
 }
 
-void MulticastPubSub::schedule_retransmits_(std::shared_ptr<std::vector<uint8_t>> datagram, const GroupAddr &group) {
-  // Schedule (count - 1) additional sends via Component::set_timeout, which
-  // is dispatched from loop() so each fire is non-blocking. The shared_ptr
-  // captured by value in each lambda keeps the buffer alive until the
-  // final firing. delay_ms == 0 still goes through set_timeout: the resends
-  // fire on the next loop iteration rather than synchronously, which keeps
-  // a high retransmit_count from starving other components.
-  for (uint8_t i = 1; i < this->retransmit_count_; i++) {
+void MulticastPubSub::cancel_indefinite_retransmit_(const std::string &topic) {
+  auto it = this->indefinite_jobs_.find(topic);
+  if (it != this->indefinite_jobs_.end()) {
+    this->cancel_timeout(topic_crc32(topic));
+    this->indefinite_jobs_.erase(it);
+  }
+}
+
+void MulticastPubSub::schedule_retransmits_(const std::string &topic,
+                                            std::shared_ptr<std::vector<uint8_t>> datagram,
+                                            const GroupAddr &group) {
+  // See ESP8266 branch for the indefinite-mode rationale.
+  this->cancel_indefinite_retransmit_(topic);
+  if (this->retransmit_count_ == -1) {
+    uint32_t delay = this->retransmit_delay_ms_;
+    uint32_t rt_id = topic_crc32(topic);
+    auto fn = std::make_shared<std::function<void()>>();
+    *fn = [this, datagram, group, topic, delay, rt_id]() {
+      this->send_datagram_(*datagram, group);
+      auto it = this->indefinite_jobs_.find(topic);
+      if (it != this->indefinite_jobs_.end()) {
+        this->set_timeout(rt_id, delay, std::function<void()>(*it->second));
+      }
+    };
+    this->indefinite_jobs_[topic] = fn;
+    this->set_timeout(rt_id, delay, std::function<void()>(*fn));
+    return;
+  }
+  for (int16_t i = 1; i < this->retransmit_count_; i++) {
     this->set_timeout(this->retransmit_delay_ms_ * i, [this, datagram, group]() {
       this->send_datagram_(*datagram, group);
     });
