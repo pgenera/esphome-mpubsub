@@ -56,5 +56,10 @@ See [`bridge.example.yaml`](bridge.example.yaml) for the config shape.
   the same topic both ways through a broker that re-delivers to its
   publisher you can create a feedback loop -- use distinct `mqtt_topic`
   names on the two sides, or be very careful with retained/QoS settings.
-- **Loopback**: the multicast socket has `IPV6_MULTICAST_LOOP=0`, so the
-  bridge does not receive its own outbound publications.
+- **Loopback**: the multicast socket has `IPV6_MULTICAST_LOOP=1`, so a
+  second bridge or a probe co-located on the same host can receive the
+  bridge's outbound publications. Because each bridge entry is
+  one-directional, the bridge re-receiving its own packet does not feed
+  back into the inbound MQTT subscription -- it would only matter if you
+  configured a third route looping the destination MQTT topic back into
+  the same multicast topic.
