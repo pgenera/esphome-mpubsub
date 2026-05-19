@@ -6,13 +6,12 @@
 
 namespace esphome::multicast_pubsub {
 
-GroupAddr topic_to_group(std::string_view topic, Scope scope, bool well_known) {
+GroupAddr topic_to_group(std::string_view topic, Scope scope) {
   uint8_t digest[Sha256::DIGEST_SIZE];
   Sha256::hash(reinterpret_cast<const uint8_t *>(topic.data()), topic.size(), digest);
   GroupAddr addr{};
   addr[0] = 0xFF;
-  uint8_t t_bit = well_known ? 0x0U : 0x1U;
-  addr[1] = static_cast<uint8_t>((t_bit << 4) | (static_cast<uint8_t>(scope) & 0x0F));
+  addr[1] = static_cast<uint8_t>((0x1U << 4) | (static_cast<uint8_t>(scope) & 0x0F));
   for (size_t i = 0; i < 14; ++i)
     addr[2 + i] = digest[i];
   return addr;

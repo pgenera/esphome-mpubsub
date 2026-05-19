@@ -55,30 +55,6 @@ def test_default_scope_is_link_local() -> None:
     assert topic_to_group("foo").packed[1] == 0x12
 
 
-@pytest.mark.parametrize("topic", _TOPICS)
-@pytest.mark.parametrize(
-    "scope,prefix",
-    [
-        (SCOPE_LINK_LOCAL, 0xFF02),
-        (SCOPE_SITE_LOCAL, 0xFF05),
-        (SCOPE_ORG_LOCAL, 0xFF08),
-    ],
-)
-def test_well_known_clears_t_bit(topic: str, scope: int, prefix: int) -> None:
-    addr = topic_to_group(topic, scope, well_known=True)
-    raw = addr.packed
-    assert raw[0] == prefix >> 8
-    assert raw[1] == prefix & 0xFF
-    # SHA-256 prefix unchanged -- only byte 1's T-bit moves.
-    digest = hashlib.sha256(topic.encode("utf-8")).digest()[:14]
-    assert raw[2:] == digest
-
-
-def test_well_known_defaults_off() -> None:
-    """Omitting well_known must yield identical bytes to passing False."""
-    assert topic_to_group("foo") == topic_to_group("foo", well_known=False)
-
-
 def test_invalid_scope_raises() -> None:
     with pytest.raises(ValueError):
         topic_to_group("x", scope=0x3)

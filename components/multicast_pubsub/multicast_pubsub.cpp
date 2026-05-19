@@ -153,10 +153,8 @@ void MulticastPubSub::dump_config() {
                 "  Port: %u\n"
                 "  Scope: %s\n"
                 "  Hops: %u\n"
-                "  Well-known groups: %s\n"
                 "  Subscriptions: %u",
-                this->port_, scope_name, this->hops_, YESNO(this->well_known_groups_),
-                static_cast<unsigned>(this->subscriptions_.size()));
+                this->port_, scope_name, this->hops_, static_cast<unsigned>(this->subscriptions_.size()));
   for (const auto &sub : this->subscriptions_) {
     char addr_buf[64];
     group_to_string(sub.group, addr_buf, sizeof(addr_buf));
@@ -179,7 +177,7 @@ Subscription *MulticastPubSub::find_or_create_subscription_(const std::string &t
   Subscription sub;
   sub.topic = topic;
   sub.crc = topic_crc32(topic);
-  sub.group = topic_to_group(topic, this->scope_, this->well_known_groups_);
+  sub.group = topic_to_group(topic, this->scope_);
   sub.joined = false;  // loop() picks it up once netif_default is available
   this->subscriptions_.push_back(std::move(sub));
   return &this->subscriptions_.back();
@@ -202,7 +200,7 @@ bool MulticastPubSub::publish(const std::string &topic, std::span<const uint8_t>
     return false;
   }
   uint32_t crc = topic_crc32(topic);
-  GroupAddr group = topic_to_group(topic, this->scope_, this->well_known_groups_);
+  GroupAddr group = topic_to_group(topic, this->scope_);
   size_t total = HEADER_LEN + payload.size();
 
   struct pbuf *p = pbuf_alloc(PBUF_TRANSPORT, static_cast<u16_t>(total), PBUF_RAM);
@@ -409,10 +407,8 @@ void MulticastPubSub::dump_config() {
                 "  Port: %u\n"
                 "  Scope: %s\n"
                 "  Hops: %u\n"
-                "  Well-known groups: %s\n"
                 "  Subscriptions: %u",
-                this->port_, scope_name, this->hops_, YESNO(this->well_known_groups_),
-                static_cast<unsigned>(this->subscriptions_.size()));
+                this->port_, scope_name, this->hops_, static_cast<unsigned>(this->subscriptions_.size()));
   for (const auto &sub : this->subscriptions_) {
     char addr_buf[64];
     group_to_string(sub.group, addr_buf, sizeof(addr_buf));
@@ -435,7 +431,7 @@ Subscription *MulticastPubSub::find_or_create_subscription_(const std::string &t
   Subscription sub;
   sub.topic = topic;
   sub.crc = topic_crc32(topic);
-  sub.group = topic_to_group(topic, this->scope_, this->well_known_groups_);
+  sub.group = topic_to_group(topic, this->scope_);
   this->subscriptions_.push_back(std::move(sub));
   // Group join happens in setup() for subscriptions registered before then;
   // for late subscriptions, join immediately so we start receiving.
@@ -468,7 +464,7 @@ bool MulticastPubSub::publish(const std::string &topic, std::span<const uint8_t>
     return false;
   }
   uint32_t crc = topic_crc32(topic);
-  GroupAddr group = topic_to_group(topic, this->scope_, this->well_known_groups_);
+  GroupAddr group = topic_to_group(topic, this->scope_);
 
   std::array<uint8_t, MAX_DATAGRAM> buf;
   encode_header(crc, encoding, static_cast<uint16_t>(payload.size()), buf.data());

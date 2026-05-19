@@ -8,7 +8,6 @@ multicast_pubsub:
   port: 18512                   # uint16, default 18512
   scope: link-local             # link-local | site-local | organization-local
   hops: 1                       # uint8 1..255, default 1
-  well_known_groups: false      # default false; set true to use ff02::/ff05::/ff08:: instead of ff12::/ff15::/ff18::
   messages:                     # optional list of typed message schemas
     - id: room_climate
       fields:
@@ -27,7 +26,6 @@ multicast_pubsub:
 | `port`       | no       | uint16   | `18512`       | UDP port. Both publishers and subscribers must use the same value. Adjacent to ESPHome's `udp:` default (18511). |
 | `scope`      | no       | enum     | `link-local`  | IPv6 multicast scope. See `docs/PROTOCOL.md` §2.1.                          |
 | `hops`       | no       | int 1–255| `1`           | `IPV6_MULTICAST_HOPS`. Raise above 1 if you need multi-subnet routing.      |
-| `well_known_groups` | no | bool | `false` | Clear the T-bit so topic groups use the well-known ranges (`ff02::/ff05::/ff08::`). Workaround for consumer L2 gear that drops or rate-limits transient (`ff12::`) multicast. Publisher and every subscriber must agree. See `docs/PROTOCOL.md` §2.2. |
 | `on_message` | no       | list     | empty         | Topic-keyed triggers. The trigger argument `x` is `std::vector<uint8_t>`.   |
 | `messages`   | no       | list     | empty         | Typed protobuf message schemas. Each entry generates a C++ struct named after `id` (PascalCase). Requires `api:` to also be configured (we use its protobuf primitives). |
 
