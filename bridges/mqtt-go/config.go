@@ -119,6 +119,13 @@ type Config struct {
 	Schemas []SchemaConfig `yaml:"schemas"`
 	Bridges []BridgeEntry  `yaml:"bridges"`
 
+	// JSONTranslation gates the dynamic JSON <-> proto translation feature.
+	// Default false: a config with `schemas:` or per-entry `schema:` is
+	// rejected. This keeps the feature opt-in so a bridge binary upgrade
+	// can't silently start reinterpreting payloads on a deployment that
+	// didn't ask for it.
+	JSONTranslation bool `yaml:"json_translation"`
+
 	// schemasByID is the validated lookup, built at load time.
 	schemasByID map[string]*Schema
 }
@@ -174,6 +181,17 @@ func (c *Config) applyDefaults() error {
 	}
 	if c.MPubsub.Encryption.Key != "" {
 		c.MPubsub.EncryptionKey = DeriveKey(c.MPubsub.Encryption.Key)
+	}
+	if !c.JSONTranslation {
+		if len(c.Schemas) > 0 {
+			return fmt.Errorf("schemas: configured but json_translation is false (default); set json_translation: true to enable JSON <-> proto translation")
+		}
+		for i, b := range c.Bridges {
+			if b.Schema != "" {
+				return fmt.Errorf("bridges[%d]: schema %q set but json_translation is false (default); set json_translation: true to enable", i, b.Schema)
+			}
+		}
+		return nil
 	}
 	c.schemasByID = make(map[string]*Schema, len(c.Schemas))
 	for i, sc := range c.Schemas {

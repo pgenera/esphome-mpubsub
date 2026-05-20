@@ -93,3 +93,40 @@ func TestRequireEncryptionWrongDirectionRejected(t *testing.T) {
 		t.Errorf("expected require_encryption direction error, got %v", err)
 	}
 }
+
+func TestJSONTranslationDefaultRejectsSchemas(t *testing.T) {
+	c := minimalConfig()
+	c.Schemas = []SchemaConfig{{
+		ID:     "r",
+		Fields: []SchemaFieldConfig{{Tag: 1, Type: "int32", Name: "a"}},
+	}}
+	err := mustValidate(t, c)
+	if err == nil || !strings.Contains(err.Error(), "json_translation is false") {
+		t.Errorf("expected json_translation gate error, got %v", err)
+	}
+}
+
+func TestJSONTranslationDefaultRejectsPerEntrySchema(t *testing.T) {
+	c := minimalConfig()
+	c.Bridges[0].Schema = "r"
+	err := mustValidate(t, c)
+	if err == nil || !strings.Contains(err.Error(), "json_translation is false") {
+		t.Errorf("expected json_translation gate error on entry schema, got %v", err)
+	}
+}
+
+func TestJSONTranslationEnabledLoadsSchema(t *testing.T) {
+	c := minimalConfig()
+	c.JSONTranslation = true
+	c.Schemas = []SchemaConfig{{
+		ID:     "r",
+		Fields: []SchemaFieldConfig{{Tag: 1, Type: "int32", Name: "a"}},
+	}}
+	c.Bridges[0].Schema = "r"
+	if err := mustValidate(t, c); err != nil {
+		t.Errorf("schema config with flag on should validate: %v", err)
+	}
+	if c.Bridges[0].schemaPtr == nil {
+		t.Errorf("schemaPtr should be resolved when flag is on")
+	}
+}
