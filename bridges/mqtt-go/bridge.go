@@ -53,6 +53,10 @@ func (b *Bridge) verbosef(src, dst string, payload []byte) {
 type mpubsubToMQTTRoute struct {
 	MQTTTopic         string
 	RequireEncryption bool
+	// Schema, when non-nil, restricts this route to PROTO packets whose
+	// SCHEMA_ID matches; the body is decoded and re-emitted as JSON.
+	// When nil, the route forwards RAW packets verbatim.
+	Schema *Schema
 }
 
 func NewBridge(cfg *Config, log *slog.Logger) (*Bridge, error) {
@@ -111,7 +115,7 @@ func (b *Bridge) Run(ctx context.Context) error {
 					mpubsubTopic = msg.Topic()
 				}
 				group := TopicToGroup(mpubsubTopic, b.scope)
-				b.handleMQTTMessage(mpubsubTopic, group, msg)
+				b.handleMQTTMessage(mpubsubTopic, group, msg, e.schemaPtr)
 			}
 			// MQTT delivers messages at min(publish_qos, subscribe_qos). To
 			// surface the publisher's QoS to promote_qos, we must subscribe
@@ -140,11 +144,17 @@ func (b *Bridge) Run(ctx context.Context) error {
 			b.crcToMQTT[crc] = append(b.crcToMQTT[crc], mpubsubToMQTTRoute{
 				MQTTTopic:         entry.MQTTTopic,
 				RequireEncryption: entry.RequireEncryption,
+				Schema:            entry.schemaPtr,
 			})
+			schemaLog := "(raw)"
+			if entry.schemaPtr != nil {
+				schemaLog = fmt.Sprintf("%s/0x%04x", entry.schemaPtr.ID, entry.schemaPtr.SchemaID())
+			}
 			b.log.Info("joined mpubsub -> mqtt",
 				"mpubsub_topic", entry.MPubsubTopic, "mqtt_topic", entry.MQTTTopic,
 				"group", group.String(), "crc", crc,
-				"require_encryption", entry.RequireEncryption)
+				"require_encryption", entry.RequireEncryption,
+				"schema", schemaLog)
 		}
 	}
 
@@ -172,8 +182,26 @@ func (b *Bridge) Run(ctx context.Context) error {
 	return nil
 }
 
-func (b *Bridge) handleMQTTMessage(mpubsubTopic string, group net.IP, msg mqtt.Message) {
-	pkt, err := EncodePacket(mpubsubTopic, msg.Payload(), encodingRaw, b.cfg.MPubsub.EncryptionKey)
+func (b *Bridge) handleMQTTMessage(mpubsubTopic string, group net.IP, msg mqtt.Message, schema *Schema) {
+	body := msg.Payload()
+	encoding := byte(encodingRaw)
+	if schema != nil {
+		protoBody, err := JSONToProto(schema, msg.Payload())
+		if err != nil {
+			b.log.Warn("json -> proto encode failed",
+				"mqtt_topic", msg.Topic(), "mpubsub_topic", mpubsubTopic,
+				"schema", schema.ID, "err", err)
+			return
+		}
+		// mpubsub PROTO body = 2-byte LE SCHEMA_ID || protobuf bytes.
+		sid := schema.SchemaID()
+		body = make([]byte, 2+len(protoBody))
+		body[0] = byte(sid)
+		body[1] = byte(sid >> 8)
+		copy(body[2:], protoBody)
+		encoding = encodingProto
+	}
+	pkt, err := EncodePacket(mpubsubTopic, body, encoding, b.cfg.MPubsub.EncryptionKey)
 	if err != nil {
 		b.log.Warn("encode packet failed",
 			"mqtt_topic", msg.Topic(), "mpubsub_topic", mpubsubTopic, "err", err)
@@ -313,13 +341,19 @@ func (b *Bridge) mcastReceiveLoop(ctx context.Context) {
 		if len(routes) == 0 {
 			continue
 		}
-		// We only forward RAW packets to MQTT. PROTOBUF-encoded packets
-		// have a 2-byte SCHEMA_ID prefix that an MQTT subscriber has no
-		// way to interpret; dropping them here avoids handing junk to
-		// downstream consumers.
-		if pkt.Encoding != encodingRaw {
-			b.log.Debug("skip non-raw packet", "crc", pkt.TopicCRC, "encoding", pkt.Encoding)
-			continue
+		// Pre-decode the PROTO body once if needed: every schemaful route
+		// for this CRC peels the same 2-byte SCHEMA_ID prefix off the
+		// same body. Different routes may target different schemas, so
+		// the actual decode happens per-route below.
+		var protoSchemaID uint16
+		var protoBody []byte
+		if pkt.Encoding == encodingProto {
+			if len(pkt.Payload) < 2 {
+				b.log.Debug("proto packet too short for SCHEMA_ID", "crc", pkt.TopicCRC)
+				continue
+			}
+			protoSchemaID = uint16(pkt.Payload[0]) | uint16(pkt.Payload[1])<<8
+			protoBody = pkt.Payload[2:]
 		}
 		for _, r := range routes {
 			if r.RequireEncryption && !pkt.WasEncrypted {
@@ -327,7 +361,36 @@ func (b *Bridge) mcastReceiveLoop(ctx context.Context) {
 					"mpubsub_crc", pkt.TopicCRC, "mqtt_topic", r.MQTTTopic)
 				continue
 			}
-			t := b.mqtt.Publish(r.MQTTTopic, b.cfg.MQTT.QoS, b.cfg.MQTT.Retain, pkt.Payload)
+			var mqttPayload []byte
+			switch {
+			case r.Schema == nil && pkt.Encoding == encodingRaw:
+				mqttPayload = pkt.Payload
+			case r.Schema == nil && pkt.Encoding == encodingProto:
+				// Raw route + proto packet: an MQTT subscriber has no
+				// way to interpret the 2-byte SCHEMA_ID prefix. Drop.
+				b.log.Debug("skip proto packet on raw route",
+					"crc", pkt.TopicCRC, "mqtt_topic", r.MQTTTopic)
+				continue
+			case r.Schema != nil && pkt.Encoding != encodingProto:
+				b.log.Debug("skip non-proto packet on schema route",
+					"crc", pkt.TopicCRC, "mqtt_topic", r.MQTTTopic, "encoding", pkt.Encoding)
+				continue
+			case r.Schema != nil && pkt.Encoding == encodingProto:
+				if protoSchemaID != r.Schema.SchemaID() {
+					b.log.Debug("schema id mismatch on proto route",
+						"crc", pkt.TopicCRC, "mqtt_topic", r.MQTTTopic,
+						"want_sid", r.Schema.SchemaID(), "got_sid", protoSchemaID)
+					continue
+				}
+				jsonBytes, err := ProtoToJSON(r.Schema, protoBody)
+				if err != nil {
+					b.log.Warn("proto -> json decode failed",
+						"mqtt_topic", r.MQTTTopic, "schema", r.Schema.ID, "err", err)
+					continue
+				}
+				mqttPayload = jsonBytes
+			}
+			t := b.mqtt.Publish(r.MQTTTopic, b.cfg.MQTT.QoS, b.cfg.MQTT.Retain, mqttPayload)
 			// Don't block the multicast loop on broker round-trips. Log
 			// failures asynchronously.
 			go func(tok mqtt.Token, mqttTopic string) {
@@ -335,12 +398,12 @@ func (b *Bridge) mcastReceiveLoop(ctx context.Context) {
 					b.log.Warn("mqtt publish failed", "mqtt_topic", mqttTopic, "err", tok.Error())
 				}
 			}(t, r.MQTTTopic)
-			b.log.Debug("mpubsub -> mqtt", "mqtt_topic", r.MQTTTopic, "bytes", len(pkt.Payload))
+			b.log.Debug("mpubsub -> mqtt", "mqtt_topic", r.MQTTTopic, "bytes", len(mqttPayload))
 			srcLabel := "mpubsub"
 			if src != nil {
 				srcLabel = src.IP.String()
 			}
-			b.verbosef(srcLabel, r.MQTTTopic, pkt.Payload)
+			b.verbosef(srcLabel, r.MQTTTopic, mqttPayload)
 		}
 	}
 }

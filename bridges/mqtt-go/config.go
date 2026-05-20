@@ -87,12 +87,40 @@ type BridgeEntry struct {
 	// per-topic require_encryption on on_message / sensor.subscribe.
 	// Setting it requires mpubsub.encryption.key to be configured.
 	RequireEncryption bool `yaml:"require_encryption"`
+	// Schema references a top-level schemas entry by id. When set:
+	//   mqtt_to_mpubsub: the MQTT payload is parsed as JSON and re-encoded
+	//   as a protobuf body with that schema's SCHEMA_ID prefix; the wire
+	//   ENCODING byte is PROTO.
+	//   mpubsub_to_mqtt: only PROTO packets matching SCHEMA_ID are
+	//   forwarded; their bodies are decoded and re-emitted as JSON on MQTT.
+	// When unset, the entry is RAW pass-through (the original behavior).
+	Schema string `yaml:"schema"`
+
+	// resolved at load time; not user-facing.
+	schemaPtr *Schema
+}
+
+// SchemaConfig is one entry in the top-level `schemas:` list.
+type SchemaConfig struct {
+	ID     string              `yaml:"id"`
+	Fields []SchemaFieldConfig `yaml:"fields"`
+}
+
+type SchemaFieldConfig struct {
+	Tag      uint32 `yaml:"tag"`
+	Type     string `yaml:"type"`
+	Name     string `yaml:"name"`
+	Repeated bool   `yaml:"repeated"`
 }
 
 type Config struct {
-	MQTT    MQTTConfig    `yaml:"mqtt"`
-	MPubsub MPubsubConfig `yaml:"mpubsub"`
-	Bridges []BridgeEntry `yaml:"bridges"`
+	MQTT    MQTTConfig     `yaml:"mqtt"`
+	MPubsub MPubsubConfig  `yaml:"mpubsub"`
+	Schemas []SchemaConfig `yaml:"schemas"`
+	Bridges []BridgeEntry  `yaml:"bridges"`
+
+	// schemasByID is the validated lookup, built at load time.
+	schemasByID map[string]*Schema
 }
 
 func LoadConfig(path string) (*Config, error) {
@@ -146,6 +174,34 @@ func (c *Config) applyDefaults() error {
 	}
 	if c.MPubsub.Encryption.Key != "" {
 		c.MPubsub.EncryptionKey = DeriveKey(c.MPubsub.Encryption.Key)
+	}
+	c.schemasByID = make(map[string]*Schema, len(c.Schemas))
+	for i, sc := range c.Schemas {
+		fields := make([]SchemaField, len(sc.Fields))
+		for j, f := range sc.Fields {
+			fields[j] = SchemaField{
+				Name: f.Name, Type: f.Type, Tag: f.Tag, Repeated: f.Repeated,
+			}
+		}
+		s, err := NewSchema(sc.ID, fields)
+		if err != nil {
+			return fmt.Errorf("schemas[%d]: %w", i, err)
+		}
+		if _, dup := c.schemasByID[sc.ID]; dup {
+			return fmt.Errorf("schemas[%d]: duplicate id %q", i, sc.ID)
+		}
+		c.schemasByID[sc.ID] = s
+	}
+	for i := range c.Bridges {
+		b := &c.Bridges[i]
+		if b.Schema == "" {
+			continue
+		}
+		s, ok := c.schemasByID[b.Schema]
+		if !ok {
+			return fmt.Errorf("bridges[%d]: schema %q not defined", i, b.Schema)
+		}
+		b.schemaPtr = s
 	}
 	return nil
 }
