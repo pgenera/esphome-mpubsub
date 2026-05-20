@@ -257,7 +257,10 @@ func skipField(data []byte, wt int) (int, error) {
 		if !ok {
 			return 0, fmt.Errorf("truncated length")
 		}
-		if int(l) > len(data)-n {
+		// Compare as unsigned: a malicious varint can exceed INT_MAX, in
+		// which case int(l) wraps negative and the signed bound check
+		// silently passes -- then the slice index overflows and panics.
+		if l > uint64(len(data)-n) {
 			return 0, fmt.Errorf("length overflow")
 		}
 		return n + int(l), nil
@@ -328,7 +331,8 @@ func decodeValue(data []byte, typ string, wt int) (any, int, error) {
 		if !ok {
 			return nil, 0, fmt.Errorf("truncated string length")
 		}
-		if int(l) > len(data)-n {
+		// Unsigned compare: see skipField for the wrap-on-int-cast rationale.
+		if l > uint64(len(data)-n) {
 			return nil, 0, fmt.Errorf("string overruns body")
 		}
 		return string(data[n : n+int(l)]), n + int(l), nil
@@ -337,7 +341,7 @@ func decodeValue(data []byte, typ string, wt int) (any, int, error) {
 		if !ok {
 			return nil, 0, fmt.Errorf("truncated bytes length")
 		}
-		if int(l) > len(data)-n {
+		if l > uint64(len(data)-n) {
 			return nil, 0, fmt.Errorf("bytes overruns body")
 		}
 		// Copy so the returned slice doesn't alias the caller's buffer
