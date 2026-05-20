@@ -3,8 +3,10 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net"
+	"os"
 	"sync"
 	"time"
 
@@ -33,6 +35,19 @@ type Bridge struct {
 	indefiniteJobs map[string]chan struct{}
 
 	log *slog.Logger
+
+	// Verbose, when true, prints one line per forwarded message to stdout
+	// in the form  "<source> -> <destination> : <payload>".
+	Verbose bool
+}
+
+// verbosef prints one trace line to stdout (not stderr/slog) when verbose
+// mode is on. Payloads are rendered with %q so binary bytes are safe.
+func (b *Bridge) verbosef(src, dst string, payload []byte) {
+	if !b.Verbose {
+		return
+	}
+	fmt.Fprintf(os.Stdout, "%s -> %s : %q\n", src, dst, payload)
 }
 
 type mpubsubToMQTTRoute struct {
@@ -179,6 +194,7 @@ func (b *Bridge) handleMQTTMessage(mpubsubTopic string, group net.IP, msg mqtt.M
 	b.log.Debug("mqtt -> mpubsub",
 		"mqtt_topic", msg.Topic(), "mpubsub_topic", mpubsubTopic,
 		"bytes", len(msg.Payload()), "qos", msg.Qos(), "retransmit_count", count)
+	b.verbosef(msg.Topic(), group.String(), msg.Payload())
 	if count == -1 {
 		b.startIndefinite(mpubsubTopic, group, pkt)
 	} else if count > 1 {
@@ -280,7 +296,7 @@ func (b *Bridge) mcastReceiveLoop(ctx context.Context) {
 		if ctx.Err() != nil {
 			return
 		}
-		n, err := b.mcast.Read(buf)
+		n, src, err := b.mcast.Read(buf)
 		if err != nil {
 			if errors.Is(err, net.ErrClosed) || ctx.Err() != nil {
 				return
@@ -320,6 +336,11 @@ func (b *Bridge) mcastReceiveLoop(ctx context.Context) {
 				}
 			}(t, r.MQTTTopic)
 			b.log.Debug("mpubsub -> mqtt", "mqtt_topic", r.MQTTTopic, "bytes", len(pkt.Payload))
+			srcLabel := "mpubsub"
+			if src != nil {
+				srcLabel = src.IP.String()
+			}
+			b.verbosef(srcLabel, r.MQTTTopic, pkt.Payload)
 		}
 	}
 }

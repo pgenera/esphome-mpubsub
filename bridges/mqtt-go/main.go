@@ -17,6 +17,7 @@ func main() {
 	var (
 		cfgPath  = flag.String("config", "bridge.yaml", "path to YAML config file")
 		logLevel = flag.String("log-level", "info", "debug | info | warn | error")
+		verbose  = flag.Bool("verbose", false, "print one line per forwarded message to stdout")
 	)
 	flag.Parse()
 
@@ -42,6 +43,7 @@ func main() {
 		log.Error("bridge init", "err", err)
 		os.Exit(1)
 	}
+	bridge.Verbose = *verbose
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()

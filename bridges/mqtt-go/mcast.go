@@ -105,9 +105,8 @@ func (m *MulticastSocket) SendTo(group net.IP, data []byte) error {
 	return err
 }
 
-func (m *MulticastSocket) Read(buf []byte) (int, error) {
-	n, _, err := m.conn.ReadFromUDP(buf)
-	return n, err
+func (m *MulticastSocket) Read(buf []byte) (int, *net.UDPAddr, error) {
+	return m.conn.ReadFromUDP(buf)
 }
 
 func (m *MulticastSocket) Close() error {
